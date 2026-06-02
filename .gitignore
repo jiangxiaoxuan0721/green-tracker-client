@@ -37,3 +37,19 @@ logs/
 
 # environment
 .env
+
+# reports
+reports/
+
+# mqtt_docker_example
+/mqtt_docker_example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+*.egg
