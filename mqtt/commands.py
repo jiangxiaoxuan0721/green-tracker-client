@@ -130,6 +130,12 @@ def cmd_get_metrics(params: dict) -> dict:
     }
 
 
+@CommandHandler.register("list_commands")
+def cmd_list_commands(params: dict) -> dict:
+    """列出设备支持的所有可用命令（供云端动态发现）。"""
+    return {"commands": CommandHandler.list_commands()}
+
+
 # ============================================================
 # 辅助
 # ============================================================

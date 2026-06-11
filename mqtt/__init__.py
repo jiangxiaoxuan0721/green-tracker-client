@@ -10,7 +10,7 @@
 from .client import DeviceMQTTClient, create_mqtt_client, get_mqtt_client
 from .manager import MQTTService, MQTTSignals
 from .commands import CommandHandler
-from .topics import TOPIC_PREFIX, status_topic, response_topic, command_topic, lwt_topic
+from .topics import TOPIC_PREFIX, status_topic, response_topic, command_topic, lwt_topic, announce_topic
 
 __all__ = [
     # 核心

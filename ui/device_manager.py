@@ -3,6 +3,7 @@
 """
 import os
 import threading
+from typing import Optional
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                                QLabel, QTableWidget, QTableWidgetItem,
                                QHeaderView, QMessageBox, QProgressBar, QComboBox,
@@ -375,12 +376,12 @@ class DeviceManagerPage(QWidget):
             card = self._create_device_card(device)
             self.cards_grid.addWidget(card, row, col)
 
-        # 统计
-        if device.status == DeviceStatus.IDLE:
-            idle_count += 1
-        elif device.status == DeviceStatus.BUSY:
-            busy_count += 1
-        else:
+            # 统计
+            if device.status == DeviceStatus.IDLE:
+                idle_count += 1
+            elif device.status == DeviceStatus.BUSY:
+                busy_count += 1
+            else:
                 assigned_count += 1
 
         # 更新统计标签

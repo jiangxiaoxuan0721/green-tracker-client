@@ -265,14 +265,16 @@ class MqttPanel(QWidget):
 
         # 启动/停止按钮
         self.btn_toggle = QPushButton("启动 MQTT")
-        self.btn_toggle.setFixedHeight(40)
+        self.btn_toggle.setFixedHeight(36)
         self.btn_toggle.setMinimumWidth(110)
         self.btn_toggle.setStyleSheet(f"""
             QPushButton {{
+                font-size: 14px;
+                padding: 8px 16px;
                 background-color: {C['accent']};
                 color: white;
-                font-weight: 600;
-                border: none;
+                border: 2px solid {C['border']};
+                border-radius: 4px;
             }}
             QPushButton:hover {{ background-color: {C['accent_hover']}; }}
         """)
@@ -281,18 +283,18 @@ class MqttPanel(QWidget):
 
         # 返回按钮（最右侧，与其他页面位置统一）
         btn_back = QPushButton("← 返回")
-        btn_back.setFixedHeight(40)
+        btn_back.setFixedHeight(36)
         btn_back.setMinimumWidth(90)
-        btn_back.setStyleSheet(f"""
-            QPushButton {{
+        btn_back.setStyleSheet("""
+            QPushButton {
                 font-size: 14px;
                 padding: 8px 16px;
-                background-color: {C['text_sub']};
+                background-color: #757575;
                 color: white;
-                border: 2px solid {C['border']};
+                border: 2px solid #BDBDBD;
                 border-radius: 4px;
-            }}
-            QPushButton:hover {{ background-color: #616161; }}
+            }
+            QPushButton:hover { background-color: #616161; }
         """)
         btn_back.clicked.connect(self._go_back)
         toolbar.addWidget(btn_back)
@@ -382,22 +384,33 @@ class MqttPanel(QWidget):
         # 执行模式 & 按钮
         btn_row = QHBoxLayout()
         btn_local = QPushButton("本地执行")
+        btn_local.setFixedHeight(36)
+        btn_local.setMinimumWidth(90)
         btn_local.setStyleSheet(f"""
             QPushButton {{
+                font-size: 14px;
+                padding: 8px 16px;
                 background-color: {C['card']};
                 color: {C['text']};
-                border: 1px solid {C['border']};
+                border: 2px solid {C['border']};
+                border-radius: 4px;
             }}
-            QPushButton:hover {{ background-color: {C['bg']}; }}
+            QPushButton:hover {{ background-color: {C['bg']}; border-color: {C['accent']}; }}
         """)
         btn_local.clicked.connect(self._on_send_local)
         btn_row.addWidget(btn_local)
 
         btn_remote = QPushButton("远程发送")
+        btn_remote.setFixedHeight(36)
+        btn_remote.setMinimumWidth(90)
         btn_remote.setStyleSheet(f"""
             QPushButton {{
+                font-size: 14px;
+                padding: 8px 16px;
                 background-color: {C['accent']};
                 color: white;
+                border: 2px solid {C['border']};
+                border-radius: 4px;
             }}
             QPushButton:hover {{ background-color: {C['accent_hover']}; }}
         """)
@@ -405,6 +418,19 @@ class MqttPanel(QWidget):
         btn_row.addWidget(btn_remote)
 
         btn_refresh = QPushButton("刷新")
+        btn_refresh.setFixedHeight(36)
+        btn_refresh.setMinimumWidth(90)
+        btn_refresh.setStyleSheet(f"""
+            QPushButton {{
+                font-size: 14px;
+                padding: 8px 16px;
+                background-color: {C['card']};
+                color: {C['text']};
+                border: 2px solid {C['border']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{ background-color: {C['bg']}; border-color: {C['accent']}; }}
+        """)
         btn_refresh.clicked.connect(self._refresh_commands)
         btn_row.addWidget(btn_refresh)
         btn_row.addStretch()
@@ -440,7 +466,19 @@ class MqttPanel(QWidget):
 
         log_toolbar = QHBoxLayout()
         btn_clear_log = QPushButton("清空日志")
-        btn_clear_log.setFixedWidth(90)
+        btn_clear_log.setFixedHeight(32)
+        btn_clear_log.setMinimumWidth(90)
+        btn_clear_log.setStyleSheet(f"""
+            QPushButton {{
+                font-size: 13px;
+                padding: 6px 14px;
+                background-color: {C['card']};
+                color: {C['text']};
+                border: 2px solid {C['border']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{ background-color: {C['bg']}; border-color: {C['accent']}; }}
+        """)
         btn_clear_log.clicked.connect(lambda: self.log_viewer.clear_log())
         log_toolbar.addWidget(btn_clear_log)
         log_toolbar.addStretch()
@@ -552,20 +590,24 @@ class MqttPanel(QWidget):
         if running:
             self.btn_toggle.setStyleSheet(f"""
                 QPushButton {{
+                    font-size: 14px;
+                    padding: 8px 16px;
                     background-color: {C['danger']};
                     color: white;
-                    font-weight: 600;
-                    border: none;
+                    border: 2px solid {C['border']};
+                    border-radius: 4px;
                 }}
                 QPushButton:hover {{ background-color: #D32F2F; }}
             """)
         else:
             self.btn_toggle.setStyleSheet(f"""
                 QPushButton {{
+                    font-size: 14px;
+                    padding: 8px 16px;
                     background-color: {C['accent']};
                     color: white;
-                    font-weight: 600;
-                    border: none;
+                    border: 2px solid {C['border']};
+                    border-radius: 4px;
                 }}
                 QPushButton:hover {{ background-color: {C['accent_hover']}; }}
             """)

@@ -40,10 +40,21 @@ def lwt_topic(device_id: str = "") -> str:
 
 
 def all_device_status_topic() -> str:
-    """所有设备状态上报的通配订阅 topic"""
-    return f"{TOPIC_PREFIX}/+/device/+/status"
+    """所有设备状态上报的通配订阅 topic（4层）"""
+    return f"{TOPIC_PREFIX}/device/+/status"
 
 
 def all_device_lwt_topic() -> str:
-    """所有设备遗嘱消息的通配订阅 topic"""
-    return f"{TOPIC_PREFIX}/+/device/+/lwt"
+    """所有设备遗嘱消息的通配订阅 topic（4层）"""
+    return f"{TOPIC_PREFIX}/device/+/lwt"
+
+
+def announce_topic(device_id: str = "") -> str:
+    """设备话题发现宣告 topic（Topic Discovery）"""
+    did = device_id or _get_device_id()
+    return f"{TOPIC_PREFIX}/device/{did}/announce"
+
+
+def all_announce_topic() -> str:
+    """所有设备宣告消息的通配订阅 topic（4层，供云端使用）"""
+    return f"{TOPIC_PREFIX}/device/+/announce"

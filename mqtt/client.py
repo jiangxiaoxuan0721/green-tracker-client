@@ -41,6 +41,7 @@ from .topics import (
     response_topic as _response_topic,
     command_topic as _command_topic,
     lwt_topic as _lwt_topic,
+    announce_topic as _announce_topic,
     all_device_status_topic as _all_device_status_topic,
     all_device_lwt_topic as _all_device_lwt_topic,
 )
@@ -83,7 +84,7 @@ def _load_env():
             cfg = dict(dotenv_values(env_file))
             for k, v in cfg.items():
                 if k not in os.environ:  # 已设的环境变量优先级更高
-                    os.environ[k] = v
+                    os.environ[k] = v # type: ignore
             logger.info(f"已加载环境变量: {env_file}")
         except Exception:
             pass
@@ -145,25 +146,22 @@ class DeviceMQTTClient:
         self._client = mqtt.Client(
             client_id=self.client_id,
             protocol=mqtt.MQTTv311,
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2, # type: ignore
         )
         self._client.username_pw_set(self.device_id, self.device_secret)
 
-        # 遗嘱消息 — 异常断连时 Broker 自动发布
+        # 遗嘱消息 — 异常断连时 Broker 自动发布（retain=true，供云端发现）
         will_payload = json.dumps({
             "device_id": self.device_id,
             "status": "offline",
-            "reason": "unexpected_disconnect",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "client_id": self.client_id,
         })
         self._client.will_set(
             topic=_lwt_topic(self.device_id),
             payload=will_payload,
             qos=1,
-            retain=False,  # 注意：status 不用 retain，否则会被 LWT 覆盖
+            retain=True,   # retain: 遗嘱消息需持久化，云端可随时查询
         )
-        logger.info(f"Will Message 已设置: {_lwt_topic(self.device_id)} -> 'offline'")
+        logger.info(f"Will Message 已设置 (retain=True): {_lwt_topic(self.device_id)}")
 
         # 回调绑定
         self._client.on_connect = self._on_connect
@@ -184,7 +182,7 @@ class DeviceMQTTClient:
         client: mqtt.Client,
         userdata: Any,
         flags: dict,
-        rc: mqtt.ReasonCode,
+        rc: mqtt.ReasonCode, # type: ignore
         properties=None,
     ):
         """连接成功回调。"""
@@ -212,6 +210,10 @@ class DeviceMQTTClient:
 
             # 立即上报一次上线状态
             self._report_status("online")
+
+            # Topic Discovery: 发布宣告消息（retain=true，供云端发现本设备话题）
+            self._publish_announce(client)
+        else:
             error_msg = f"连接失败, rc={rc}"
             logger.error(error_msg)
             if hasattr(rc, "value") and rc.value == 4:
@@ -222,7 +224,7 @@ class DeviceMQTTClient:
         client: mqtt.Client,
         userdata: Any,
         flags: Any,
-        rc: mqtt.ReasonCode,
+        rc: mqtt.ReasonCode, # type: ignore
         properties=None,
     ):
         """断连回调。"""
@@ -286,7 +288,7 @@ class DeviceMQTTClient:
         # 通过回调钩子通知外部（由 manager.py 的 patch 注入信号发射）
         if hasattr(self, '_peer_status_callback'):
             try:
-                self._peer_status_callback(device_id, ip, payload)
+                self._peer_status_callback(device_id, ip, payload) # type: ignore
             except Exception:
                 pass
 
@@ -295,7 +297,7 @@ class DeviceMQTTClient:
         logger.info(f"[设备离线] device_id={device_id} (LWT 遗嘱)")
         if hasattr(self, '_peer_offline_callback'):
             try:
-                self._peer_offline_callback(device_id)
+                self._peer_offline_callback(device_id) # type: ignore
             except Exception:
                 pass
 
@@ -356,6 +358,29 @@ class DeviceMQTTClient:
         else:
             logger.error(f"状态上报失败: rc={pub_result.rc}, topic={tp}")
 
+    def _publish_announce(self, client: mqtt.Client) -> None:
+        """Topic Discovery: 发布宣告消息，声明本设备使用的话题（retain=true）。
+
+        实际话题（4层）: green-tracker/device/{device_id}/announce
+        云端订阅通配（4层，推荐）: +/device/+/announce
+        """
+        announce_payload = {
+            "protocol_version": "1.0",
+            "device_id": self.device_id,
+            "topics": {
+                "status": _status_topic(self.device_id),
+                "response": _response_topic(self.device_id),
+                "command": _command_topic(self.device_id),
+            },
+            "lwt_topic": _lwt_topic(self.device_id),
+        }
+        tp = _announce_topic(self.device_id)
+        pub_result = client.publish(tp, json.dumps(announce_payload), qos=1, retain=True)
+        if pub_result.rc == mqtt.MQTT_ERR_SUCCESS:
+            logger.info(f"Announce 宣告已发布 (retain=True): {tp}")
+        else:
+            logger.error(f"Announce 发布失败: rc={pub_result.rc}, topic={tp}")
+
     # -----------------------------------------------------------------
     # 生命周期
     # -----------------------------------------------------------------
@@ -376,6 +401,7 @@ class DeviceMQTTClient:
         logger.info(f"  心跳间隔: {self.status_interval}s")
         logger.info(f"  Status Topic: {_status_topic(self.device_id)}")
         logger.info(f"  Command Topic: {_command_topic(self.device_id)}")
+        logger.info(f"  Announce Topic: {_announce_topic(self.device_id)} (retain=True)")
         logger.info("=" * 50)
 
         # 自动重连策略
