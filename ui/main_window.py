@@ -66,13 +66,12 @@ class HomePage(QWidget):
                 font-size: 14px;
                 font-weight: 500;
                 padding: 0 20px;
-                background-color: {COLORS['accent']};
-                color: white;
+                background-color: {COLORS['card']};
+                color: {COLORS['text_primary']};
                 border: 2px solid {COLORS['border']};
                 border-radius: 4px;
             }}
-            QPushButton:hover {{ background-color: {COLORS['accent_hover']}; }}
-            QPushButton:disabled {{ background-color: {COLORS['muted']}; }}
+            QPushButton:hover {{ background-color: {COLORS['bg']}; }}
         """)
         self.btn_fetch.clicked.connect(self.fetch_tasks)
         btn_layout.addWidget(self.btn_fetch)
@@ -97,7 +96,7 @@ class HomePage(QWidget):
         btn_layout.addWidget(self.btn_monitor)
 
         # 设备管理按钮
-        self.btn_device = QPushButton("设备管理")
+        self.btn_device = QPushButton("执行单元")
         self.btn_device.setFixedHeight(40)
         self.btn_device.setMinimumWidth(110)
         self.btn_device.setStyleSheet(f"""
@@ -114,6 +113,25 @@ class HomePage(QWidget):
         """)
         self.btn_device.clicked.connect(self.show_device_manager)
         btn_layout.addWidget(self.btn_device)
+
+        # MQTT 控制台按钮
+        self.btn_mqtt = QPushButton("MQTT 控制台")
+        self.btn_mqtt.setFixedHeight(40)
+        self.btn_mqtt.setMinimumWidth(120)
+        self.btn_mqtt.setStyleSheet(f"""
+            QPushButton {{
+                font-size: 14px;
+                font-weight: 500;
+                padding: 0 20px;
+                background-color: {COLORS['card']};
+                color: {COLORS['text_primary']};
+                border: 2px solid {COLORS['border']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{ background-color: {COLORS['bg']}; }}
+        """)
+        self.btn_mqtt.clicked.connect(self.show_mqtt_panel)
+        btn_layout.addWidget(self.btn_mqtt)
 
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
@@ -140,6 +158,10 @@ class HomePage(QWidget):
         """显示设备管理页面"""
         self.main_window.show_device_manager_page()
 
+    def show_mqtt_panel(self):
+        """显示 MQTT 远程控制面板"""
+        self.main_window.show_mqtt_panel_page()
+
     def add_and_show_monitor(self, session_id: str, session_name: str, base_dir: str):
         """添加任务并显示管理页面"""
         self.main_window.show_monitor_page()
@@ -160,8 +182,16 @@ class HomePage(QWidget):
         self.task_list.clear()
         if not tasks:
             self.task_list.addItem("暂无活跃任务")
-        else:
-            for task in tasks:
+            # 清空云端缓存（无任务）
+            self.main_window._cloud_tasks = []
+            return
+
+        # 缓存云端任务列表（作为分配任务的唯一数据源）
+        self.main_window._cloud_tasks = tasks
+        # 同步本地缓存：清理已不在云端的过期任务
+        self._sync_local_sessions(tasks)
+
+        for task in tasks:
                 task_name = task.get("mission_name", "未命名")
                 task_desc = task.get("description", "")
 
@@ -211,7 +241,7 @@ class HomePage(QWidget):
                 btn_batch.setMinimumWidth(90)
                 btn_batch.setStyleSheet(btn_base_style)
 
-                btn_assign = QPushButton("分配设备")
+                btn_assign = QPushButton("分配单元")
                 btn_assign.setFixedHeight(38)
                 btn_assign.setMinimumWidth(90)
                 btn_assign.setStyleSheet(btn_base_style)
@@ -240,7 +270,7 @@ class HomePage(QWidget):
                 # 点击分配设备 -> 跳转到设备分配页面
                 btn_assign.clicked.connect(
                     lambda checked, s_id=session_id, s_name=session_name:
-                    self.main_window.show_device_assign_page(s_id, s_name)
+                    self.main_window.show_device_assign_page(s_id, s_name, return_to="home")
                 )
 
                 btn_layout.addWidget(btn_start)
@@ -255,6 +285,26 @@ class HomePage(QWidget):
                 item.setSizeHint(container.sizeHint())
                 self.task_list.setItemWidget(item, container)
 
+    def _sync_local_sessions(self, cloud_tasks: list[dict]):
+        """用云端任务列表同步本地会话缓存，清理已失效的本地任务。"""
+        cloud_ids = {t.get("id", "") for t in cloud_tasks if t.get("id")}
+        from device import get_device_state_manager
+        mgr = get_device_state_manager()
+        data = mgr._load_data()
+        local_sessions = data.get("sessions", {})
+        stale_ids = [sid for sid in local_sessions if sid not in cloud_ids]
+        if stale_ids:
+            for sid in stale_ids:
+                session = local_sessions[sid]
+                for ip in session.get("devices", []):
+                    if ip in data.get("devices", {}):
+                        data["devices"][ip]["assigned_session_id"] = None
+                        data["devices"][ip]["status"] = "idle"
+                        data["devices"][ip]["assigned_time"] = None
+                del data["sessions"][sid]
+            mgr._save_data(data)
+            print(f"[任务同步] 已清理 {len(stale_ids)} 个本地过期任务: {stale_ids}")
+
     def on_tasks_error(self, error_msg):
         self.btn_fetch.setEnabled(True)
         self.task_list.clear()
@@ -268,6 +318,10 @@ class MainWindow(QWidget):
         init_data_generator(interval=5.0)
         # 初始化时扫描设备
         self.scan_devices_on_init()
+        # 自动启动 MQTT
+        self._auto_start_mqtt()
+        # 云端任务缓存（仅包含从API获取的真实任务）
+        self._cloud_tasks: list[dict] = []
         self.init_ui()
 
     def scan_devices_on_init(self):
@@ -293,6 +347,16 @@ class MainWindow(QWidget):
         thread = threading.Thread(target=scan, daemon=True)
         thread.start()
 
+    def _auto_start_mqtt(self):
+        """启动时自动连接 MQTT（静默失败，不阻塞 UI）。"""
+        try:
+            from mqtt.manager import MQTTService
+            service = MQTTService.get_instance()
+            service.start()
+            print("[MQTT] 后台服务已启动")
+        except Exception as e:
+            print(f"[MQTT] 启动跳过: {e}")
+
     def init_ui(self):
         self.setWindowTitle("Green Tracker")
         self.resize(720, 480)
@@ -310,6 +374,7 @@ class MainWindow(QWidget):
         self.batch_upload_page = None
         self.device_manager_page = None
         self.device_assign_page = None
+        self.mqtt_panel_page = None
 
         # 将主页添加到堆栈
         self.stack.addWidget(self.home_page)
@@ -346,6 +411,10 @@ class MainWindow(QWidget):
     def show_home_page(self):
         self.stack.setCurrentWidget(self.home_page)
 
+    def get_cloud_tasks(self) -> list[dict]:
+        """获取云端缓存的任务列表（仅包含从API获取的真实任务）。"""
+        return list(self._cloud_tasks)
+
     def show_monitor_page(self):
         """显示任务管理页面"""
         if self.monitor_page is None:
@@ -371,7 +440,7 @@ class MainWindow(QWidget):
         self.stack.setCurrentWidget(self.batch_upload_page)
 
     def show_device_manager_page(self):
-        """显示设备管理页面"""
+        """显示执行单元管理页面"""
         if self.device_manager_page is None:
             from ui.device_manager import DeviceManagerPage
             self.device_manager_page = DeviceManagerPage(self)
@@ -381,7 +450,7 @@ class MainWindow(QWidget):
         if hasattr(self.device_manager_page, 'on_page_show'):
             self.device_manager_page.on_page_show()
 
-    def show_device_assign_page(self, session_id: str, session_name: str):
+    def show_device_assign_page(self, session_id: str, session_name: str, return_to: str = "monitor"):
         """显示设备分配页面"""
         from ui.device_assign import DeviceAssignPage
 
@@ -390,6 +459,14 @@ class MainWindow(QWidget):
             self.stack.removeWidget(self.device_assign_page)
             self.device_assign_page.deleteLater()
 
-        self.device_assign_page = DeviceAssignPage(session_id, session_name, self)
+        self.device_assign_page = DeviceAssignPage(session_id, session_name, self, return_to=return_to)
         self.stack.addWidget(self.device_assign_page)
         self.stack.setCurrentWidget(self.device_assign_page)
+
+    def show_mqtt_panel_page(self):
+        """显示 MQTT 远程控制面板"""
+        if self.mqtt_panel_page is None:
+            from ui.mqtt_panel import MqttPanel
+            self.mqtt_panel_page = MqttPanel(self)
+            self.stack.addWidget(self.mqtt_panel_page)
+        self.stack.setCurrentWidget(self.mqtt_panel_page)

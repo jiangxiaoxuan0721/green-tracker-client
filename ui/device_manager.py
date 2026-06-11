@@ -1,5 +1,5 @@
 """
-设备管理页面 - 管理已发现的设备
+执行单元管理页面 - 管理已发现的执行单元
 """
 import os
 import threading
@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                                QLabel, QTableWidget, QTableWidgetItem,
                                QHeaderView, QMessageBox, QProgressBar, QComboBox,
                                QDialog, QDialogButtonBox, QScrollArea, QFrame, QGridLayout)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPalette
 from device import scan_devices, get_device_state_manager, DeviceStatus
 
@@ -28,7 +28,7 @@ COLORS = {
 
 
 class ScanDevicesThread(QThread):
-    """设备扫描线程"""
+    """执行单元扫描线程"""
     finished = pyqtSignal(list)
     progress = pyqtSignal(str)
     
@@ -44,8 +44,31 @@ class ScanDevicesThread(QThread):
             self.finished.emit([])
 
 
+class HealthCheckThread(QThread):
+    """后台 TCP 探测线程：主动检测所有设备在线状态"""
+    results = pyqtSignal(dict)  # {ip: bool}
+
+    def __init__(self, device_manager):
+        super().__init__()
+        self.device_manager = device_manager
+        self._running = True
+
+    def run(self):
+        while self._running:
+            try:
+                result = self.device_manager.health_check_all(timeout=0.5)
+                self.results.emit(result)
+            except Exception:
+                pass
+            # 每 5 秒探测一轮
+            self.msleep(5000)
+
+    def stop(self):
+        self._running = False
+
+
 class DeviceManagerPage(QWidget):
-    """设备管理页面"""
+    """执行单元管理页面（TCP 主动探测 + MQTT 信号辅助）"""
 
     def __init__(self, main_window):
         super().__init__()
@@ -53,16 +76,37 @@ class DeviceManagerPage(QWidget):
         self.device_manager = get_device_state_manager()
         self.scanned_devices = []
         self.thread = None  # type: ignore
+        self._health_thread: Optional[HealthCheckThread] = None
         self.init_ui()
-        # 初始化时自动刷新状态（不扫描设备）
+
+        # ===== MQTT 信号（辅助：其他设备通过 MQTT 上报时立即感知）=====
+        try:
+            from mqtt import MQTTService
+            svc = MQTTService.get_instance()
+            svc.signals.device_heartbeat.connect(self._on_peer_heartbeat)
+            svc.signals.device_offline.connect(self._on_peer_offline)
+        except Exception:
+            pass
+
+        # 初始加载
         self.refresh_devices()
+
+        # ===== 核心：TCP 探测后台线程 =====
+        self._health_thread = HealthCheckThread(self.device_manager)
+        self._health_thread.results.connect(self._on_health_results)
+        self._health_thread.start()
 
     def closeEvent(self, a0):
         """页面关闭时清理资源"""
-        if self.thread and self.thread.isRunning(): # type: ignore
-            self.thread.quit() # type: ignore
-            self.thread.wait() # type: ignore
-        a0.accept() # type: ignore
+        # 停止 TCP 探测线程
+        if self._health_thread and self._health_thread.isRunning():
+            self._health_thread.stop()
+            self._health_thread.wait(3000)
+        # 停止扫描线程
+        if self.thread and self.thread.isRunning():  # type: ignore
+            self.thread.quit()  # type: ignore
+            self.thread.wait()  # type: ignore
+        a0.accept()  # type: ignore
     
     def init_ui(self):
         self.setStyleSheet(f"background-color: {COLORS['bg']};")
@@ -72,7 +116,7 @@ class DeviceManagerPage(QWidget):
         # 标题栏
         title_layout = QHBoxLayout()
 
-        page_title = QLabel("设备管理")
+        page_title = QLabel("执行单元管理")
         page_title.setStyleSheet("font-size: 20px; font-weight: 600; color: #2D2D2D;")
         title_layout.addWidget(page_title)
 
@@ -100,7 +144,7 @@ class DeviceManagerPage(QWidget):
         # 操作按钮栏
         btn_bar = QHBoxLayout()
         
-        self.btn_scan = QPushButton("扫描设备")
+        self.btn_scan = QPushButton("扫描执行单元")
         self.btn_scan.setFixedHeight(36)
         self.btn_scan.setMinimumWidth(100)
         self.btn_scan.setStyleSheet(f"""
@@ -137,8 +181,8 @@ class DeviceManagerPage(QWidget):
         
         btn_bar.addStretch()
         
-        # 设备统计
-        self.stats_label = QLabel("设备总数: 0 | 空闲: 0 | 忙碌: 0")
+        # 执行单元统计
+        self.stats_label = QLabel("执行单元总数: 0 | 空闲: 0 | 忙碌: 0")
         self.stats_label.setStyleSheet(f"font-size: 14px; color: {COLORS['text_secondary']};")
         btn_bar.addWidget(self.stats_label)
 
@@ -197,12 +241,76 @@ class DeviceManagerPage(QWidget):
     def go_back(self):
         self.main_window.show_home_page()
 
+    def _on_peer_heartbeat(self, device_id: str, status_dict: dict):
+        """MQTT 信号：其他设备上线心跳 → 立即注册/更新 + 刷新 UI"""
+        ip = status_dict.get("ip", device_id)
+        # 注册或更新设备（写内存缓存，O(1)）
+        self.device_manager.register_device(
+            ip=ip,
+            device_type=status_dict.get("device_type", "MQTT Device"),
+        )
+        self.refresh_devices()
+
+    def _on_peer_offline(self, device_id: str):
+        """MQTT 信号：其他设备 LWT 离线 → 从内存缓存移除 + 刷新 UI"""
+        data = self.device_manager._cache
+        # 查找匹配的设备（按 ip 或 device_id 字段）
+        target_ip = None
+        for ip, d in data.get("devices", {}).items():
+            if ip == device_id or d.get("device_id") == device_id:
+                target_ip = ip
+                break
+
+        if target_ip:
+            session_id = data["devices"][target_ip].get("assigned_session_id")
+            if session_id and session_id in data.get("sessions", {}):
+                data["sessions"][session_id]["devices"] = [
+                    d for d in data["sessions"][session_id].get("devices", [])
+                    if d != target_ip
+                ]
+            del data["devices"][target_ip]
+            print(f"[设备离线] 已移除: {target_ip} (device_id={device_id})")
+
+        self.refresh_devices()
+
+    def _on_health_results(self, results: dict):
+        """TCP 探测结果：立即处理离线/上线状态变化"""
+        data = self.device_manager._cache
+        changed = False
+
+        for ip, online in results.items():
+            device = data.get("devices", {}).get(ip)
+            if not device:
+                continue
+            if online:
+                # 设备在线：确保在缓存中（如果之前被移除则重新注册）
+                if ip not in data["devices"]:
+                    self.device_manager.register_device(
+                        ip=ip,
+                        device_type=device.get("device_type", "Unknown Device"),
+                    )
+                    changed = True
+            else:
+                # 设备离线：从缓存中移除
+                session_id = device.get("assigned_session_id")
+                if session_id and session_id in data.get("sessions", {}):
+                    data["sessions"][session_id]["devices"] = [
+                        d for d in data["sessions"][session_id].get("devices", [])
+                        if d != ip
+                    ]
+                del data["devices"][ip]
+                changed = True
+
+        # 仅在有变化时刷新 UI（避免不必要的重绘）
+        if changed:
+            self.refresh_devices()
+
     def on_page_show(self):
-        """页面显示时刷新设备状态"""
+        """页面显示时刷新执行单元状态"""
         self.refresh_devices()
     
     def start_scan(self):
-        """开始扫描设备"""
+        """开始扫描执行单元"""
         self.btn_scan.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # 不确定进度
@@ -233,9 +341,12 @@ class DeviceManagerPage(QWidget):
                 mac=device.get("mac"),
                 hostname=device.get("hostname")
             )
+
+        # 扫描完成后自动刷新状态
+        self.refresh_devices()
         
     def _refresh_devices_immediate(self):
-        """立即刷新设备列表，不检查线程状态"""
+        """立即刷新执行单元列表（读内存缓存，无磁盘 I/O）"""
         devices = self.device_manager.get_all_devices()
 
         # 清理超时设备
@@ -255,7 +366,7 @@ class DeviceManagerPage(QWidget):
         busy_count = 0
         assigned_count = 0
 
-        # 创建设备卡片（每行2列，从左上到右下排列）
+        # 创建执行单元卡片（每行2列，从左上到右下排列）
         cols = 2  # 每行显示2个卡片
         for index, device in enumerate(devices):
             # 动态计算网格位置（每行2列，从左上到右下排列）
@@ -264,32 +375,37 @@ class DeviceManagerPage(QWidget):
             card = self._create_device_card(device)
             self.cards_grid.addWidget(card, row, col)
 
-            # 统计
-            if device.status == DeviceStatus.IDLE:
-                idle_count += 1
-            elif device.status == DeviceStatus.BUSY:
-                busy_count += 1
-            else:
+        # 统计
+        if device.status == DeviceStatus.IDLE:
+            idle_count += 1
+        elif device.status == DeviceStatus.BUSY:
+            busy_count += 1
+        else:
                 assigned_count += 1
 
         # 更新统计标签
         self.stats_label.setText(
-            f"设备总数: {len(devices)} | 空闲: {idle_count} | 已分配: {assigned_count} | 忙碌: {busy_count}"
+            f"执行单元总数: {len(devices)} | 空闲: {idle_count} | 已分配: {assigned_count} | 忙碌: {busy_count}"
         )
 
     def _create_device_card(self, device):
-        """创建设备卡片"""
+        """创建执行单元卡片"""
+        is_virtual = getattr(device, 'is_virtual', False)
+
         card = QFrame()
         card.setFrameStyle(QFrame.Shape.NoFrame)
         card.setFixedHeight(120)
-        card.setObjectName("deviceCard")
+        object_name = "virtualUnitCard" if is_virtual else "deviceCard"
+        card.setObjectName(object_name)
+
+        # 统一样式：虚拟单元与物理设备保持一致
         card.setStyleSheet(f"""
-            #deviceCard {{
+            #{object_name} {{
                 background-color: {COLORS['card']};
                 border: 2px solid {COLORS['border']};
                 border-radius: 8px;
             }}
-            #deviceCard:hover {{
+            #{object_name}:hover {{
                 border-color: {COLORS['accent']};
                 background-color: #F8FCFD;
             }}
@@ -311,7 +427,7 @@ class DeviceManagerPage(QWidget):
             status_color = COLORS['accent']
             status_text = "已分配"
 
-        # 标题行（IP + 状态）
+        # 标题行（标识 + 虚拟标签 + 状态）
         title_layout = QHBoxLayout()
         title_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -333,7 +449,7 @@ class DeviceManagerPage(QWidget):
 
         layout.addLayout(title_layout)
 
-        # 设备类型
+        # 单元类型
         type_label = QLabel(device.device_type)
         type_label.setStyleSheet(f"font-size: 13px; color: {COLORS['text_secondary']};")
         layout.addWidget(type_label)
@@ -344,12 +460,13 @@ class DeviceManagerPage(QWidget):
             task_label.setStyleSheet(f"font-size: 13px; color: {COLORS['text_secondary']};")
             layout.addWidget(task_label)
 
+
         # 操作按钮栏
         btn_layout = QHBoxLayout()
         btn_layout.setContentsMargins(0, 4, 0, 0)
         btn_layout.setSpacing(8)
 
-        # 空闲或已分配的设备可以切换任务
+        # 空闲或已分配的执行单元可以切换任务
         if device.status == DeviceStatus.IDLE or device.status == DeviceStatus.ASSIGNED:
             btn_switch = QPushButton("切换任务")
             btn_switch.setFixedHeight(30)
@@ -371,7 +488,7 @@ class DeviceManagerPage(QWidget):
             )
             btn_layout.addWidget(btn_switch)
 
-        # 已分配但不是忙碌状态的设备可以取消分配
+        # 已分配但不是忙碌状态的执行单元可以取消分配
         if device.assigned_session_id and device.status != DeviceStatus.BUSY:
             btn_unassign = QPushButton("取消分配")
             btn_unassign.setFixedHeight(30)
@@ -401,26 +518,34 @@ class DeviceManagerPage(QWidget):
         return card
 
     def refresh_devices(self):
-        """刷新设备列表"""
+        """刷新执行单元列表"""
         # 如果有扫描线程正在运行，先不刷新
         if self.thread and self.thread.isRunning(): # type: ignore
             return
 
+        # 确保 DataGenerator 虚拟执行单元已注册
+        try:
+            from ui.task_window import get_data_generator
+            gen = get_data_generator()
+            gen.ensure_registered()
+        except Exception:
+            pass
+
         self._refresh_devices_immediate()
     
     def unassign_device(self, ip: str):
-        """取消设备分配"""
+        """取消执行单元分配"""
         reply = QMessageBox.question(
             self,
             "确认取消分配",
-            f"确定要取消设备 {ip} 的任务分配吗？",
+            f"确定要取消执行单元 {ip} 的任务分配吗？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
 
         if reply == QMessageBox.StandardButton.Yes:
             success = self.device_manager.unassign_device(ip)
             if success:
-                QMessageBox.information(self, "成功", f"设备 {ip} 已取消分配")
+                QMessageBox.information(self, "成功", f"执行单元 {ip} 已取消分配")
                 # 延迟刷新，避免在消息框显示时刷新
                 from PyQt6.QtCore import QTimer
                 QTimer.singleShot(100, self.refresh_devices)
@@ -428,14 +553,22 @@ class DeviceManagerPage(QWidget):
                 QMessageBox.warning(self, "失败", f"取消分配失败")
 
     def switch_task_for_device(self, ip: str):
-        """为设备切换任务"""
-        # 获取所有可用的任务
-        data = self.device_manager._load_data()
-        sessions = data.get("sessions", {})
+        """为执行单元切换任务（仅允许选择云端API返回的真实任务）"""
+        # 从 MainWindow 获取云端缓存的实时任务列表
+        cloud_tasks = self.main_window.get_cloud_tasks()
 
-        if not sessions:
-            QMessageBox.information(self, "提示", "当前没有可用的任务，请先创建任务。")
+        if not cloud_tasks:
+            QMessageBox.information(
+                self, "提示",
+                "当前没有可用的云端任务，请先在主页点击「获取可用任务」联网同步。"
+            )
             return
+
+        # 构建 {session_id: session_name} 映射
+        cloud_task_map = {
+            t.get("id", ""): t.get("mission_name", "未命名")
+            for t in cloud_tasks if t.get("id")
+        }
 
         # 创建任务选择对话框
         dialog = QDialog(self)
@@ -447,14 +580,13 @@ class DeviceManagerPage(QWidget):
         layout.setSpacing(12)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        # 当前设备信息
+        # 当前执行单元信息
         device = self.device_manager.get_device(ip)
         current_task = device.assigned_session_id if device else None
 
         info_label = QLabel()
         if current_task:
-            session_info = sessions.get(current_task, {})
-            session_name = session_info.get("session_name", current_task)
+            session_name = cloud_task_map.get(current_task, current_task)
             info_label.setText(f"当前任务: {session_name}")
         else:
             info_label.setText("当前状态: 空闲")
@@ -492,8 +624,7 @@ class DeviceManagerPage(QWidget):
                 font-size: 14px;
             }}
         """)
-        for session_id, session_info in sessions.items():
-            session_name = session_info.get("session_name", session_id)
+        for session_id, session_name in cloud_task_map.items():
             combo.addItem(f"{session_name} ({session_id})", session_id)
         layout.addWidget(combo)
 
@@ -539,15 +670,14 @@ class DeviceManagerPage(QWidget):
             if current_task:
                 self.device_manager.unassign_device(ip)
 
-            # 分配到新任务
-            session_info = sessions.get(new_session_id, {})
-            session_name = session_info.get("session_name", new_session_id)
+            # 分配到新任务（使用云端任务信息）
+            session_name = cloud_task_map.get(new_session_id, new_session_id)
             success = self.device_manager.assign_device_to_session(ip, new_session_id, session_name)
 
             if success:
-                QMessageBox.information(self, "成功", f"设备 {ip} 已切换到任务 {session_name}")
+                QMessageBox.information(self, "成功", f"执行单元 {ip} 已切换到任务 {session_name}")
                 from PyQt6.QtCore import QTimer
                 QTimer.singleShot(100, self.refresh_devices)
             else:
-                QMessageBox.warning(self, "失败", f"切换任务失败，设备可能正忙碌")
+                QMessageBox.warning(self, "失败", f"切换任务失败，执行单元可能正忙碌")
 

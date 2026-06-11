@@ -37,3 +37,13 @@ def lwt_topic(device_id: str = "") -> str:
     """遗嘱消息 topic（异常断线检测）"""
     did = device_id or _get_device_id()
     return f"{TOPIC_PREFIX}/device/{did}/lwt"
+
+
+def all_device_status_topic() -> str:
+    """所有设备状态上报的通配订阅 topic"""
+    return f"{TOPIC_PREFIX}/+/device/+/status"
+
+
+def all_device_lwt_topic() -> str:
+    """所有设备遗嘱消息的通配订阅 topic"""
+    return f"{TOPIC_PREFIX}/+/device/+/lwt"

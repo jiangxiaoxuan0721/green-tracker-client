@@ -36,10 +36,13 @@ except ImportError:
 # 同模块导入
 from .commands import CommandHandler
 from .topics import (
+    TOPIC_PREFIX,
     status_topic as _status_topic,
     response_topic as _response_topic,
     command_topic as _command_topic,
     lwt_topic as _lwt_topic,
+    all_device_status_topic as _all_device_status_topic,
+    all_device_lwt_topic as _all_device_lwt_topic,
 )
 
 # ============================================================
@@ -192,14 +195,23 @@ class DeviceMQTTClient:
                 f"(client_id={self.client_id})"
             )
 
-            # 订阅命令下发主题
+            # 订阅命令下发主题（仅本机）
             cmd_tp = _command_topic(self.device_id)
             client.subscribe(cmd_tp, qos=1)
             logger.info(f"已订阅命令主题: {cmd_tp}")
 
+            # 订阅所有设备状态上报 topic（用于感知其他设备在线）
+            status_wildcard = _all_device_status_topic()
+            client.subscribe(status_wildcard, qos=1)
+            logger.info(f"已订阅全局状态主题: {status_wildcard}")
+
+            # 订阅所有设备 LWT 遗嘱消息（用于感知其他设备离线）
+            lwt_wildcard = _all_device_lwt_topic()
+            client.subscribe(lwt_wildcard, qos=1)
+            logger.info(f"已订阅全局 LWT 主题: {lwt_wildcard}")
+
             # 立即上报一次上线状态
             self._report_status("online")
-        else:
             error_msg = f"连接失败, rc={rc}"
             logger.error(error_msg)
             if hasattr(rc, "value") and rc.value == 4:
@@ -219,16 +231,73 @@ class DeviceMQTTClient:
             logger.warning(f"意外断开 (rc={rc})，将自动重连...")
 
     def _on_message(self, client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage):
-        """收到消息回调（命令下发）。"""
+        """收到消息回调（命令下发 / 其他设备状态 / LWT 遗嘱）。"""
         try:
             payload = json.loads(msg.payload.decode("utf-8"))
-            logger.debug(f"收到消息: topic={msg.topic}, payload={payload}")
+            topic = msg.topic
+
+            # --- 本机命令下发 ---
             if "command" in payload:
                 self._handle_command(payload)
+                return
+
+            # --- 其他设备状态上报 (green-tracker/+/device/{device_id}/status) ---
+            if topic.endswith("/status"):
+                device_id = self._extract_device_id_from_topic(topic, "/status")
+                if device_id and device_id != self.device_id:
+                    self._on_peer_status(device_id, payload)
+                    return
+
+            # --- 其他设备 LWT 离线消息 (green-tracker/+/device/{device_id}/lwt) ---
+            if topic.endswith("/lwt"):
+                device_id = self._extract_device_id_from_topic(topic, "/lwt")
+                if device_id and device_id != self.device_id:
+                    self._on_peer_lwt(device_id, payload)
+                    return
+
+            logger.debug(f"收到消息: topic={topic}, payload={payload}")
         except json.JSONDecodeError as e:
             logger.error(f"JSON 解析失败: {e}, raw={msg.payload[:200]}")
         except Exception as e:
             logger.error(f"消息处理异常: {e}", exc_info=True)
+
+    @staticmethod
+    def _extract_device_id_from_topic(topic: str, suffix: str) -> Optional[str]:
+        """从 topic 中提取 device_id。
+        例: 'green-tracker/device/abc123/status' → 'abc123'
+        """
+        prefix = f"{TOPIC_PREFIX}/device/"
+        if not topic.startswith(prefix):
+            return None
+        rest = topic[len(prefix):]  # 'abc123/status'
+        if not rest.endswith(suffix):
+            return None
+        return rest[:-len(suffix)] or None
+
+    # -----------------------------------------------------------------
+    # 其他设备状态感知
+    # -----------------------------------------------------------------
+
+    def _on_peer_status(self, device_id: str, payload: dict):
+        """处理其他设备的状态上报消息。"""
+        status = payload.get("status", "?")
+        ip = payload.get("ip", device_id)
+        logger.info(f"[设备状态] device_id={device_id} ip={ip} status={status}")
+        # 通过回调钩子通知外部（由 manager.py 的 patch 注入信号发射）
+        if hasattr(self, '_peer_status_callback'):
+            try:
+                self._peer_status_callback(device_id, ip, payload)
+            except Exception:
+                pass
+
+    def _on_peer_lwt(self, device_id: str, payload: dict):
+        """处理其他设备的 LWT 遗嘱（离线）消息。"""
+        logger.info(f"[设备离线] device_id={device_id} (LWT 遗嘱)")
+        if hasattr(self, '_peer_offline_callback'):
+            try:
+                self._peer_offline_callback(device_id)
+            except Exception:
+                pass
 
     # -----------------------------------------------------------------
     # 命令处理
@@ -321,9 +390,11 @@ class DeviceMQTTClient:
         # 启动后台消息循环
         self._client.loop_start()
 
-        # 注册信号
-        signal.signal(signal.SIGINT, lambda s, f: self.stop())
-        signal.signal(signal.SIGTERM, lambda s, f: self.stop())
+        # 注册信号（仅在主线程中有效，QThread 中跳过）
+        import threading
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGINT, lambda s, f: self.stop())
+            signal.signal(signal.SIGTERM, lambda s, f: self.stop())
 
         # 主循环：定期心跳
         logger.info("设备运行中...")

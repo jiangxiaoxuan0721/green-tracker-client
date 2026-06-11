@@ -1,5 +1,5 @@
 """
-设备分配页面 - 将设备分配给任务
+执行单元分配页面 - 将执行单元分配给任务
 """
 import threading
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
@@ -31,7 +31,7 @@ class ScanDevicesThread(QThread):
     
     def run(self):
         try:
-            self.progress.emit("正在扫描局域网设备...")
+            self.progress.emit("正在扫描局域网执行单元...")
             devices = scan_devices()
             self.finished.emit(devices)
         except Exception as e:
@@ -39,15 +39,16 @@ class ScanDevicesThread(QThread):
 
 
 class DeviceAssignPage(QWidget):
-    """设备分配页面"""
+    """执行单元分配页面"""
 
     device_assigned = pyqtSignal(str, str)
 
-    def __init__(self, session_id: str, session_name: str, main_window):
+    def __init__(self, session_id: str, session_name: str, main_window, return_to: str = "monitor"):
         super().__init__()
         self.session_id = session_id
         self.session_name = session_name
         self.main_window = main_window
+        self.return_to = return_to  # "home" 或 "monitor"
         self.device_manager = get_device_state_manager()
         self.scanned_devices = []
         self.selected_devices = set()
@@ -70,7 +71,7 @@ class DeviceAssignPage(QWidget):
         # 标题栏
         title_layout = QHBoxLayout()
 
-        page_title = QLabel(f"分配设备 - {self.session_name}")
+        page_title = QLabel(f"分配执行单元 - {self.session_name}")
         page_title.setStyleSheet("font-size: 20px; font-weight: 600; color: #2D2D2D;")
         title_layout.addWidget(page_title)
 
@@ -98,7 +99,7 @@ class DeviceAssignPage(QWidget):
         # 操作按钮栏
         btn_bar = QHBoxLayout()
         
-        self.btn_scan = QPushButton("扫描设备")
+        self.btn_scan = QPushButton("扫描执行单元")
         self.btn_scan.setFixedHeight(36)
         self.btn_scan.setMinimumWidth(100)
         self.btn_scan.setStyleSheet(f"""
@@ -136,7 +137,7 @@ class DeviceAssignPage(QWidget):
         btn_bar.addStretch()
         
         # 已分配统计
-        self.assigned_label = QLabel("已分配设备: 0")
+        self.assigned_label = QLabel("已分配执行单元: 0")
         self.assigned_label.setStyleSheet(f"font-size: 14px; color: {COLORS['text_secondary']};")
         btn_bar.addWidget(self.assigned_label)
 
@@ -147,7 +148,7 @@ class DeviceAssignPage(QWidget):
         self.device_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.device_table.setColumnCount(5)
         self.device_table.setHorizontalHeaderLabels([
-            "选择", "IP地址", "设备类型", "状态", "分配任务"
+            "选择", "标识", "单元类型", "状态", "分配任务"
         ])
         
         header = self.device_table.horizontalHeader()
@@ -209,7 +210,7 @@ class DeviceAssignPage(QWidget):
         self.setLayout(layout)
 
     def start_scan(self):
-        """开始扫描设备"""
+        """开始扫描执行单元"""
         self.btn_scan.setEnabled(False)
 
         self.thread = ScanDevicesThread() # type: ignore
@@ -240,24 +241,31 @@ class DeviceAssignPage(QWidget):
         self.refresh_devices()
     
     def refresh_devices(self):
-        """刷新设备列表"""
+        """刷新执行单元列表"""
+        # 确保 DataGenerator 虚拟单元已注册
+        try:
+            from ui.task_window import get_data_generator
+            gen = get_data_generator()
+            gen.ensure_registered()
+        except Exception:
+            pass
         # 如果有扫描线程正在运行，先不刷新
         if self.thread and self.thread.isRunning(): # type: ignore
             return
 
-        # 只显示空闲设备
+        # 只显示空闲执行单元
         devices = self.device_manager.get_all_devices(status_filter=DeviceStatus.IDLE)
 
         # 同时获取当前任务的已分配设备
         session_devices = self.device_manager.get_session_devices(self.session_id)
         assigned_ips = {d.ip for d in session_devices}
 
-        # 合并显示：空闲设备 + 当前任务的已分配设备
+        # 合并显示：空闲执行单元 + 当前任务的已分配执行单元
         all_ips = {d.ip for d in devices} | assigned_ips
         all_devices = []
         for ip in all_ips:
             if ip in assigned_ips:
-                # 已分配的设备
+                # 已分配的执行单元
                 for sd in session_devices:
                     if sd.ip == ip:
                         all_devices.append(sd)
@@ -284,8 +292,9 @@ class DeviceAssignPage(QWidget):
             )
             self.device_table.setCellWidget(row, 0, checkbox)
             
-            # IP地址
-            self.device_table.setItem(row, 1, QTableWidgetItem(device.ip))
+            # 标识（IP 或虚拟单元 ID）
+            display_id = device.ip
+            self.device_table.setItem(row, 1, QTableWidgetItem(display_id))
             
             # 设备类型
             self.device_table.setItem(row, 2, QTableWidgetItem(device.device_type))
@@ -310,7 +319,7 @@ class DeviceAssignPage(QWidget):
                 self.device_table.setItem(row, 4, QTableWidgetItem("-"))
         
         # 更新统计标签
-        self.assigned_label.setText(f"已分配设备: {len(assigned_ips)}")
+        self.assigned_label.setText(f"已分配执行单元: {len(assigned_ips)}")
     
     def on_checkbox_changed(self, ip: str, state: int):
         """复选框状态改变"""
@@ -319,12 +328,12 @@ class DeviceAssignPage(QWidget):
         else:  # 取消选中
             self.selected_devices.discard(ip)
         
-        self.assigned_label.setText(f"已分配设备: {len(self.selected_devices)}")
+        self.assigned_label.setText(f"已分配执行单元: {len(self.selected_devices)}")
     
     def confirm_assignment(self):
         """确认分配"""
         if not self.selected_devices:
-            QMessageBox.warning(self, "提示", "请选择要分配的设备")
+            QMessageBox.warning(self, "提示", "请选择要分配的执行单元")
             return
 
         # 获取当前任务的已分配设备
@@ -343,9 +352,9 @@ class DeviceAssignPage(QWidget):
                     ip, self.session_id, self.session_name
                 )
                 if not success:
-                    QMessageBox.warning(self, "错误", f"设备 {ip} 分配失败")
+                    QMessageBox.warning(self, "错误", f"执行单元 {ip} 分配失败")
 
-        QMessageBox.information(self, "成功", f"已分配 {len(self.selected_devices)} 台设备到任务")
+        QMessageBox.information(self, "成功", f"已分配 {len(self.selected_devices)} 个执行单元到任务")
 
         # 延迟刷新，避免在消息框显示时刷新
         from PyQt6.QtCore import QTimer
@@ -356,4 +365,7 @@ class DeviceAssignPage(QWidget):
             self.device_assigned.emit(self.session_id, ip)
     
     def go_back(self):
-        self.main_window.show_monitor_page()
+        if self.return_to == "home":
+            self.main_window.show_home_page()
+        else:
+            self.main_window.show_monitor_page()

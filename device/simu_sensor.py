@@ -21,8 +21,13 @@ from .data_models import (
 )
 
 
+# 虚拟执行单元 ID 常量
+VIRTUAL_UNIT_ID = "virtual:datagenerator"
+VIRTUAL_UNIT_TYPE = "DataGenerator (虚拟传感器)"
+
+
 class DataGenerator:
-    """后台数据生成器 - 持续生成随机数据但不存储"""
+    """后台数据生成器 - 作为常驻虚拟执行单元运行，持续生成模拟传感器数据"""
 
     ENV_RANGES = {
         DataSubType.TEMPERATURE: (15.0, 35.0),
@@ -54,6 +59,26 @@ class DataGenerator:
         self.location_geom = "POINT(116.397428 39.90923)"
         self.altitude_m = 100.0
         self.heading = 0.0
+        self._generate_count = 0  # 累计生成次数
+        self._register_as_virtual_unit()
+
+    def _register_as_virtual_unit(self):
+        """将自身注册为虚拟执行单元"""
+        try:
+            from .device_state import get_device_state_manager
+            mgr = get_device_state_manager()
+            mgr.register_virtual_unit(VIRTUAL_UNIT_ID, VIRTUAL_UNIT_TYPE)
+        except Exception:
+            pass  # 初始化阶段管理器可能还未就绪
+
+    def ensure_registered(self):
+        """确保虚拟执行单元已注册（供外部调用）"""
+        try:
+            from .device_state import get_device_state_manager
+            mgr = get_device_state_manager()
+            mgr.register_virtual_unit(VIRTUAL_UNIT_ID, VIRTUAL_UNIT_TYPE)
+        except Exception:
+            pass
 
     def set_location(self, geom: str, altitude: float = 100.0, heading: float = 0.0):
         """设置位置"""
@@ -93,6 +118,7 @@ class DataGenerator:
             data = self._generate_one()
             with self._lock:
                 self.latest_data = data
+                self._generate_count += 1
             time.sleep(self.interval)
 
     def generate(self) -> Dict[str, Any]:
@@ -116,6 +142,19 @@ class DataGenerator:
         """获取最新一条数据"""
         with self._lock:
             return self.latest_data
+
+    def get_unit_status(self) -> dict:
+        """获取虚拟执行单元状态信息（供 UI 展示）"""
+        with self._lock:
+            latest = self.latest_data
+        return {
+            "unit_id": VIRTUAL_UNIT_ID,
+            "unit_type": VIRTUAL_UNIT_TYPE,
+            "running": self.running,
+            "interval": self.interval,
+            "generate_count": self._generate_count,
+            "latest_data": latest,
+        }
 
 
 class SensorSimulator:
@@ -159,7 +198,23 @@ class SensorSimulator:
         self.altitude_m = 100.0
         self.heading = 0.0
 
-    def set_location(self, geom: str, altitude: float = 100.0, heading: float = 0.0):
+    def _register_as_virtual_unit(self):
+        """将自身注册为虚拟执行单元"""
+        try:
+            from .device_state import get_device_state_manager
+            mgr = get_device_state_manager()
+            mgr.register_virtual_unit(VIRTUAL_UNIT_ID, VIRTUAL_UNIT_TYPE)
+        except Exception:
+            pass  # 初始化阶段管理器可能还未就绪
+
+    def ensure_registered(self):
+        """确保虚拟执行单元已注册（供外部调用）"""
+        try:
+            from .device_state import get_device_state_manager
+            mgr = get_device_state_manager()
+            mgr.register_virtual_unit(VIRTUAL_UNIT_ID, VIRTUAL_UNIT_TYPE)
+        except Exception:
+            pass
         """设置采集位置"""
         self.location_geom = geom
         self.altitude_m = altitude

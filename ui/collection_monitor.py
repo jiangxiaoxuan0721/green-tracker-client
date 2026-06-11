@@ -111,7 +111,7 @@ class TaskCard(QFrame):
         bottom_layout.addStretch()
 
         # 设备分配按钮
-        self.btn_assign = QPushButton("分配设备")
+        self.btn_assign = QPushButton("分配单元")
         self.btn_assign.setFixedHeight(30)
         self.btn_assign.setMinimumWidth(70)
         self.btn_assign.setStyleSheet(f"""
@@ -372,6 +372,16 @@ class CollectionMonitorPage(QWidget):
         self.card_layout.setColumnStretch(0, 1)
         self.card_layout.setColumnStretch(1, 1)
         self.card_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+
+        # 无任务占位提示
+        self.empty_label = QLabel("无任务")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.setStyleSheet(f"""
+            font-size: 16px; color: {COLORS['text_secondary']};
+            padding: 60px 0px;
+        """)
+        self.card_layout.addWidget(self.empty_label, 0, 0, 1, 2, Qt.AlignmentFlag.AlignCenter)
+
         self.card_container.setLayout(self.card_layout)
         scroll.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         scroll.setWidget(self.card_container)
@@ -396,6 +406,7 @@ class CollectionMonitorPage(QWidget):
         self.card_layout.addWidget(card, row, col)
 
         self.task_cards[session_id] = card
+        self.empty_label.hide()
 
     def on_assign_device(self, session_id: str, session_name: str):
         """处理设备分配点击"""
@@ -409,6 +420,8 @@ class CollectionMonitorPage(QWidget):
             self.card_layout.removeWidget(card)
             card.deleteLater()
             del self.task_cards[session_id]
+        if not self.task_cards:
+            self.empty_label.show()
 
     def on_task_status_changed(self, session_id: str, is_running: bool):
         """任务状态变化回调"""
