@@ -108,8 +108,8 @@ class _MQTTWorker(QThread):
         orig_report_status = client._report_status
         orig_handle_command = client._handle_command
 
-        def patched_on_connect(c, userdata, flags, rc, properties=None):
-            orig_on_connect(c, userdata, flags, rc, properties)
+        def patched_on_connect(client, userdata, flags, rc, properties=None):
+            orig_on_connect(client, userdata, flags, rc, properties)
             if rc == 0:
                 try:
                     s.connected.emit(f"{client.broker_host}:{client.broker_port}")
@@ -117,8 +117,8 @@ class _MQTTWorker(QThread):
                 except RuntimeError:
                     pass
 
-        def patched_on_disconnect(c, userdata, flags, rc, properties=None):
-            orig_on_disconnect(c, userdata, flags, rc, properties)
+        def patched_on_disconnect(client, userdata, flags, rc, properties=None):
+            orig_on_disconnect(client, userdata, flags, rc, properties)
             if rc != 0:
                 try:
                     s.disconnected.emit(f"rc={rc}")

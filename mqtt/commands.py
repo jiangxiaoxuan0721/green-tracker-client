@@ -10,7 +10,7 @@ import platform
 import socket
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Callable, Dict, Optional
 
 
 logger = logging.getLogger("mqtt-commands")
@@ -134,6 +134,17 @@ def cmd_get_metrics(params: dict) -> dict:
 def cmd_list_commands(params: dict) -> dict:
     """列出设备支持的所有可用命令（供云端动态发现）。"""
     return {"commands": CommandHandler.list_commands()}
+
+
+@CommandHandler.register("cloud_probe")
+def cmd_cloud_probe(params: dict) -> dict:
+    """云端探测指令 — 验证云端能否通过 list_commands 发现并下发此命令。"""
+    return {
+        "probe_response": "ok",
+        "device_id": __get_device_id(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "note": "如果你看到这条消息，说明云端已成功完成 command discovery 并下发指令",
+    }
 
 
 # ============================================================

@@ -60,44 +60,92 @@ class UploadWorker(threading.Thread):
         except Exception as e:
             print(f"保存图片状态失败: {e}")
 
+    # CSV 标准表头
+    _CSV_HEADER = 'timestamp,sensor_id,data_type,value,unit,is_uploaded'
+    _CSV_FIELDNAMES = ['timestamp', 'sensor_id', 'data_type', 'value', 'unit', 'is_uploaded']
+
+    def _read_csv_rows(self) -> list[dict]:
+        """安全读取 CSV 行，自动修复缺失表头"""
+        csv_file = os.path.join(self.data_dir, "data.csv")
+        if not os.path.exists(csv_file):
+            return []
+
+        try:
+            with open(csv_file, 'r', encoding='utf-8') as f:
+                first_line = f.readline().strip()
+                if not first_line:
+                    return []
+                # 检测第一行是否为标准表头
+                has_header = (first_line.replace(' ', '') == self._CSV_HEADER.replace(' ', ''))
+                if not has_header and not first_line.startswith('20'):
+                    has_header = True  # 第一行看起来像表头（非时间戳开头）
+                # 用 DictReader 解析
+                f.seek(0)
+                reader = csv.DictReader(f, fieldnames=self._CSV_FIELDNAMES if not has_header else None)
+                rows = []
+                for row in reader:
+                    # 跳过被误读的表头行
+                    if not has_header and row.get('timestamp') == self._CSV_FIELDNAMES[0] or \
+                       (row.get('sensor_id') == 'sensor_id'):
+                        continue
+                    rows.append(row)
+                return rows
+        except Exception as e:
+            print(f"读取CSV失败: {e}")
+            return []
+
     def run(self):
         results = {"success": 0, "failed": 0, "details": []}
         csv_file = os.path.join(self.data_dir, "data.csv")
 
-        if not os.path.exists(csv_file):
+        # ---- 预扫描：统计所有待上传项（数值+文件），计算统一进度总量 ----
+        all_rows = self._read_csv_rows()
+        pending_rows = [r for r in all_rows
+                        if r.get('is_uploaded', 'False').strip().lower() != 'true']
+
+        # 扫描待上传图片
+        images_dir = os.path.join(self.data_dir, "images")
+        image_status = self._load_image_status()
+        pending_images = []
+        if os.path.exists(images_dir):
+            image_files = [f for f in os.listdir(images_dir) if f.endswith(('.jpg', '.png', '.jpeg'))]
+            pending_images = [f for f in image_files if not image_status.get(f, {}).get("uploaded", False)]
+
+        # 统一总量 = 数值待上传 + 文件待上传
+        total_numeric = len(pending_rows)
+        total_files = len(pending_images)
+        grand_total = total_numeric + total_files
+
+        if grand_total == 0:
             self.finished_callback(results)
             return
 
-        # 读取CSV
-        rows = []
-        with open(csv_file, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+        current_global = 0  # 全局已处理计数
 
-        # 只统计待上传的行
-        pending_rows = []
-        for row in rows:
-            is_uploaded = row.get('is_uploaded', 'False').strip().lower() == 'true'
-            if not is_uploaded:
-                pending_rows.append(row)
-
-        total = len(pending_rows)
-        if total == 0:
-            self.finished_callback(results)
-            return
-
-        # 只遍历待上传的行
-        for i, row in enumerate(pending_rows):
+        # ---- 阶段1：上传数值数据 ----
+        rows_to_write_back = []
+        for row in all_rows:
             if not self.running:
                 break
 
+            is_uploaded = row.get('is_uploaded', 'False').strip().lower() == 'true'
+            if is_uploaded:
+                rows_to_write_back.append(row)
+                continue  # 已上传的跳过，但仍保留用于回写
+
             try:
-                # 上传数字数据
                 from api.upload_numeric_data import upload_numeric_data
-                result = upload_numeric_data(
+                sensor_id = row.get('sensor_id', '')
+                value = row.get('value', '')
+                if not sensor_id:
+                    print(f"跳过无效行（缺少 sensor_id）: {row}")
+                    rows_to_write_back.append(row)
+                    current_global += 1
+                    continue
+                upload_numeric_data(
                     session_id=self.session_id,
-                    data_subtype=row['sensor_id'],
-                    data_value=row['value'],
+                    data_subtype=sensor_id,
+                    data_value=value,
                     location_geom=None,
                     altitude_m=None,
                     heading=None
@@ -105,56 +153,47 @@ class UploadWorker(threading.Thread):
                 results["success"] += 1
                 results["details"].append({
                     "type": "numeric",
-                    "sensor_id": row['sensor_id'],
-                    "value": row['value'],
+                    "sensor_id": sensor_id,
+                    "value": value,
                     "status": "success",
                     "time": datetime.now().strftime("%H:%M:%S")
                 })
-                # 标记为已上传
                 row['is_uploaded'] = 'True'
 
             except Exception as e:
                 results["failed"] += 1
                 results["details"].append({
                     "type": "numeric",
-                    "sensor_id": row['sensor_id'],
-                    "value": row['value'],
+                    "sensor_id": row.get('sensor_id', '(缺失)'),
+                    "value": row.get('value', '(缺失)'),
                     "status": "failed",
                     "error": str(e),
                     "time": datetime.now().strftime("%H:%M:%S")
                 })
 
-            # 更新进度 - 使用实际处理的行数
+            current_global += 1
             latest_detail = results["details"][-1] if results["details"] else {}
-            self.progress_callback(i + 1, total, results["success"], results["failed"], latest_detail)
+            self.progress_callback(current_global, grand_total, results["success"], results["failed"], latest_detail)
 
-        # 保存更新后的CSV
-        with open(csv_file, 'w', encoding='utf-8', newline='') as f:
-            fieldnames = ['timestamp', 'sensor_id', 'data_type', 'value', 'unit', 'is_uploaded']
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
+            rows_to_write_back.append(row)
 
-        # 上传图片
-        images_dir = os.path.join(self.data_dir, "images")
-        if os.path.exists(images_dir) and self.running:
-            # 加载图片上传状态
-            image_status = self._load_image_status()
+        # 回写CSV（更新is_uploaded标记，同时补全缺失表头）
+        if rows_to_write_back and os.path.exists(csv_file):
+            with open(csv_file, 'w', encoding='utf-8', newline='') as f:
+                fieldnames = self._CSV_FIELDNAMES
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows_to_write_back)
 
-            image_files = [f for f in os.listdir(images_dir) if f.endswith(('.jpg', '.png', '.jpeg'))]
-
-            # 只上传未标记为已上传的图片
-            pending_images = [f for f in image_files if not image_status.get(f, {}).get("uploaded", False)]
-            total_images = len(pending_images)
-
-            for idx, img_file in enumerate(pending_images):
+        # ---- 阶段2：上传图片文件 ----
+        if pending_images and self.running:
+            for img_file in pending_images:
                 if not self.running:
                     break
                 try:
                     from api.upload_file_data import upload_file_data
                     img_path = os.path.join(images_dir, img_file)
-                    # 根据文件名判断类型
-                    subtype = "rgb"  # 默认
+                    subtype = "rgb"
                     if "nir" in img_file.lower():
                         subtype = "nir"
                     elif "thermal" in img_file.lower():
@@ -175,7 +214,6 @@ class UploadWorker(threading.Thread):
                         "status": "success",
                         "time": datetime.now().strftime("%H:%M:%S")
                     })
-                    # 标记为已上传
                     image_status[img_file] = {
                         "uploaded": True,
                         "upload_time": datetime.now().isoformat()
@@ -190,10 +228,10 @@ class UploadWorker(threading.Thread):
                         "time": datetime.now().strftime("%H:%M:%S")
                     })
 
+                current_global += 1
                 latest_detail = results["details"][-1] if results["details"] else {}
-                self.progress_callback(total + idx + 1, total + total_images, results["success"], results["failed"], latest_detail)
+                self.progress_callback(current_global, grand_total, results["success"], results["failed"], latest_detail)
 
-            # 保存图片上传状态
             self._save_image_status(image_status)
 
         self.finished_callback(results)

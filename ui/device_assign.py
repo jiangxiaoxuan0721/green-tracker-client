@@ -51,13 +51,15 @@ class DeviceAssignPage(QWidget):
         self.return_to = return_to  # "home" 或 "monitor"
         self.device_manager = get_device_state_manager()
         self.scanned_devices = []
-        self.selected_devices = set()
+        self.selected_devices: set[str] = set()
+        self._is_destroyed = False  # 防止销毁后回调
         self.thread = None  # type: ignore
         self.init_ui()
         self.refresh_devices()
 
     def closeEvent(self, a0):
-        """页面关闭时清理资源"""
+        """页面关闭时清理资源，防止 deleteLater 后的回调崩溃"""
+        self._is_destroyed = True
         if self.thread and self.thread.isRunning(): # type: ignore
             self.thread.quit() # type: ignore
             self.thread.wait() # type: ignore
@@ -242,6 +244,10 @@ class DeviceAssignPage(QWidget):
     
     def refresh_devices(self):
         """刷新执行单元列表"""
+        # 页面已销毁时直接返回，避免访问已释放的 C++ 对象
+        if self._is_destroyed:
+            return
+
         # 确保 DataGenerator 虚拟单元已注册
         try:
             from ui.task_window import get_data_generator
@@ -323,6 +329,8 @@ class DeviceAssignPage(QWidget):
     
     def on_checkbox_changed(self, ip: str, state: int):
         """复选框状态改变"""
+        if self._is_destroyed:
+            return
         if state == 2:  # 选中
             self.selected_devices.add(ip)
         else:  # 取消选中
@@ -356,14 +364,19 @@ class DeviceAssignPage(QWidget):
 
         QMessageBox.information(self, "成功", f"已分配 {len(self.selected_devices)} 个执行单元到任务")
 
-        # 延迟刷新，避免在消息框显示时刷新
+        # 延迟刷新，使用安全回调避免页面销毁后访问已释放对象
         from PyQt6.QtCore import QTimer
-        QTimer.singleShot(100, self.refresh_devices)
+        QTimer.singleShot(100, self._safe_refresh)
 
         # 发射信号通知其他页面
         for ip in self.selected_devices:
             self.device_assigned.emit(self.session_id, ip)
-    
+
+    def _safe_refresh(self):
+        """安全的延迟刷新回调，防止页面销毁后访问已释放的 C++ 对象"""
+        if not self._is_destroyed:
+            self.refresh_devices()
+
     def go_back(self):
         if self.return_to == "home":
             self.main_window.show_home_page()

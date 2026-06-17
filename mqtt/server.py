@@ -139,7 +139,7 @@ class CloudMQTTClient:
         broker_port: int = 0,
         broker_username: str = "",
         broker_password: str = "",
-        device_manager: DeviceManager = None,
+        device_manager: DeviceManager | None = None,
     ):
         import time
 
@@ -151,7 +151,7 @@ class CloudMQTTClient:
         self._client = mqtt.Client(
             client_id=self.client_id,
             protocol=mqtt.MQTTv311,
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+            callback_api_version=mqtt.CallbackAPIVersion.VERSION2, # type: ignore
         )
         if broker_username and broker_password:
             self._client.username_pw_set(broker_username, broker_password)

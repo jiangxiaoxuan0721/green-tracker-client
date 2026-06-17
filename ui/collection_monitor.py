@@ -244,10 +244,13 @@ class TaskCard(QFrame):
         self.status_changed.emit(self.session_id, False)
 
     def _collect_loop(self):
-        """采集循环 - 同时生成模拟数据和采集设备图像"""
-        from ui.task_window import get_data_generator
-        from device import get_device_state_manager, ESP32CAM
-        generator = get_data_generator()
+        """采集循环 — 通过 AbstractBaseDevice 统一接口采集数据"""
+        from device import (
+            VirtualSensorDevice,
+            ESP32CameraDevice,
+            get_device_state_manager,
+        )
+        from device.virtual.sensor_simulator import VIRTUAL_UNIT_TYPE
         device_manager = get_device_state_manager()
         csv_file = os.path.join(self.data_dir, "data.csv")
 
@@ -257,36 +260,43 @@ class TaskCard(QFrame):
 
         while self.is_running and not self.stop_event.is_set():
             try:
-                # 1. 生成并采集模拟数据（保留原有逻辑）
-                data = generator.generate()
-
-                # 写入CSV
-                timestamp = datetime.now().isoformat()
-                with open(csv_file, 'a', encoding='utf-8') as f:
-                    f.write(f"{timestamp},{data['data_subtype'].value},{data['data_type'].value},"
-                           f"{data['data_value']},{data['unit'].value},False\n")
-
-                # 2. 从分配给当前任务的设备采集图像
+                # 获取当前任务分配的所有设备（含虚拟+硬件）
                 devices = device_manager.get_session_devices(self.session_id)
-                for device in devices:
-                    if device.device_type == "ESP32-CAM":
-                        try:
-                            cam = ESP32CAM(device.ip)
-                            image_data = cam.get_capture(timeout=5.0)
-                            if image_data:
-                                # 保存图像到 images 目录，文件名格式: IP_时间戳.jpg
-                                timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                filename = f"{device.ip}_{timestamp_str}.jpg"
-                                filepath = os.path.join(images_dir, filename)
-                                with open(filepath, 'wb') as f:
-                                    f.write(image_data)
-                                print(f"图像已保存: {filepath}")
-                            else:
-                                print(f"获取设备 {device.ip} 图像失败")
-                        except Exception as e:
-                            print(f"设备 {device.ip} 采集错误: {e}")
 
-                self.collected_count += 1
+                # 本次循环实际采集到的数据条数
+                round_count = 0
+
+                # 1. 虚拟传感器数值采集 — 仅当已分配虚拟设备时才采集
+                has_virtual = any(
+                    d.device_type == VIRTUAL_UNIT_TYPE for d in devices
+                )
+                if has_virtual:
+                    batch = VirtualSensorDevice().collect(session_id=self.session_id)
+                    for record in batch.records:
+                        timestamp = datetime.now().isoformat()
+                        with open(csv_file, 'a', encoding='utf-8') as f:
+                            f.write(f"{timestamp},{record.data_subtype.value},"
+                                   f"{record.data_type.value},{record.data_value},"
+                                   f"{getattr(record.unit if hasattr(record, 'unit') else None, 'value', '-')},False\n")
+                        round_count += 1
+
+                # 2. 从分配给当前任务的硬件设备采集图像
+                for dev in devices:
+                    if dev.device_type == "ESP32-CAM":
+                        try:
+                            cam = ESP32CameraDevice(dev.ip)
+                            file_record = cam.capture_file_data(
+                                session_id=self.session_id,
+                            )
+                            if file_record and file_record.local_path:
+                                print(f"图像已保存: {file_record.local_path}")
+                                round_count += 1
+                            else:
+                                print(f"获取设备 {dev.ip} 图像失败")
+                        except Exception as e:
+                            print(f"设备 {dev.ip} 采集错误: {e}")
+
+                self.collected_count += round_count
 
                 # 更新UI（需在主线程）
                 self.count_label.setText(f"{self.collected_count} 条")

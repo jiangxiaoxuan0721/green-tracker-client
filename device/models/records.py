@@ -1,70 +1,11 @@
-"""
-本地数据模型 - 支持离线存储和断网续传
-"""
+"""数据记录模型与本地存储。"""
+
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 from datetime import datetime
-from enum import Enum
 import uuid
 
-
-class DataType(str, Enum):
-    """数据类型枚举"""
-    ENVIRONMENTAL = "environmental"
-    SOIL = "soil"
-    FILE = "file"
-
-
-class DataSubType(str, Enum):
-    """数据子类型枚举"""
-    # FILE 类型
-    RGB = "rgb"
-    NIR = "nir"
-    RED_EDGE = "red_edge"
-    THERMAL = "thermal"
-    MULTISPECTRAL = "multispectral"
-    VIDEO = "video"
-
-    # ENVIRONMENTAL 类型
-    TEMPERATURE = "temperature"
-    HUMIDITY = "humidity"
-    CO2 = "co2"
-    LIGHT = "light"
-    PRESSURE = "pressure"
-
-    # SOIL 类型
-    MOISTURE = "moisture"
-    PH = "ph"
-    EC = "ec"
-    TEMPERATURE_SOIL = "temperature_soil"
-
-
-class DataUnit(str, Enum):
-    """数据单位枚举"""
-    CELSIUS = "°C"
-    PERCENT = "%"
-    PPM = "ppm"
-    LUX = "lux"
-    HPA = "hPa"
-    KPA = "kPa"
-    CM = "cm"
-    M = "m"
-    US_CM = "μS/cm"
-    DS_M = "dS/m"
-    PH = "pH"
-
-
-SUBTYPE_UNIT_MAP = {
-    DataSubType.TEMPERATURE: DataUnit.CELSIUS,
-    DataSubType.HUMIDITY: DataUnit.PERCENT,
-    DataSubType.CO2: DataUnit.PPM,
-    DataSubType.LIGHT: DataUnit.LUX,
-    DataSubType.PRESSURE: DataUnit.HPA,
-    DataSubType.MOISTURE: DataUnit.PERCENT,
-    DataSubType.PH: DataUnit.PH,
-    DataSubType.EC: DataUnit.US_CM,
-    DataSubType.TEMPERATURE_SOIL: DataUnit.CELSIUS,
-}
+from .data_types import DataType, DataSubType
 
 
 class LocalDataRecord(BaseModel):
@@ -117,7 +58,7 @@ class LocalFileRecord(BaseModel):
 
 
 class DataStore:
-    """本地数据存储管理器（JSON文件存储）"""
+    """本地数据存储管理器（JSON 文件存储）。"""
 
     def __init__(self, store_file: str = "data_store.json"):
         import json
@@ -161,14 +102,12 @@ class DataStore:
         return record.id
 
     def get_pending_uploads(self) -> tuple:
-        """获取待上传的记录"""
         data = self._load()
         numeric_pending = [LocalDataRecord(**r) for r in data["numeric_data"] if not r.get("is_uploaded", False)]
         file_pending = [LocalFileRecord(**r) for r in data["file_data"] if not r.get("is_uploaded", False)]
         return numeric_pending, file_pending
 
     def mark_numeric_uploaded(self, local_id: str, server_data_id: str):
-        """标记数字记录已上传"""
         data = self._load()
         for r in data["numeric_data"]:
             if r["id"] == local_id:
@@ -179,7 +118,6 @@ class DataStore:
         self._save(data)
 
     def mark_file_uploaded(self, local_id: str, server_data_id: str, object_key: str, access_url: str):
-        """标记文件记录已上传"""
         data = self._load()
         for r in data["file_data"]:
             if r["id"] == local_id:
@@ -192,7 +130,6 @@ class DataStore:
         self._save(data)
 
     def get_all_records(self) -> dict:
-        """获取所有记录"""
         data = self._load()
         return {
             "numeric_data": [LocalDataRecord(**r) for r in data["numeric_data"]],
@@ -200,11 +137,4 @@ class DataStore:
         }
 
 
-__all__ = [
-    "DataType",
-    "DataSubType",
-    "DataUnit",
-    "LocalDataRecord",
-    "LocalFileRecord",
-    "DataStore",
-]
+__all__ = ["LocalDataRecord", "LocalFileRecord", "DataStore"]

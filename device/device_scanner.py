@@ -9,17 +9,23 @@ from typing import List, Dict, Callable, Optional
 import subprocess
 import platform
 import warnings
-import time
 
 # 忽略 SSL 警告
 warnings.filterwarnings('ignore')
 
 # 扫描配置
-MAX_WORKERS = 100  # 最大并发数
-PORT_SCAN_TIMEOUT = 0.3  # 端口扫描超时（秒）
-HTTP_TIMEOUT = 1.5  # HTTP 识别超时（秒）
-# 常用端口（按设备可能性排序）
-COMMON_PORTS = [80, 8080, 443, 8443, 5000, 3000, 53, 22, 21]
+MAX_WORKERS = 150          # 最大并发数
+PING_TIMEOUT = 0.15        # Ping 探测超时（秒）
+PORT_SCAN_TIMEOUT = 0.12   # 端口扫描超时（秒）— 局域网内足够
+HTTP_TIMEOUT = 0.6         # HTTP 识别超时（秒）— 局域网内足够
+ESP32_PROBE_TIMEOUT = 0.8  # ESP32-CAM 专用探测超时
+
+# 局域网探测必须绕过系统代理，否则请求被转发到代理服务器导致超时
+_NO_PROXY = {"http": None, "https": None}  # type: ignore
+
+# 常用端口（按设备可能性排序），第一阶段只扫最关键的几个
+FAST_PORTS = [80, 8080]
+COMMON_PORTS = [80, 8080, 443, 8443, 5000, 3000]  # 第二阶段扩展
 
 
 # 设备类型识别规则
@@ -118,6 +124,38 @@ def get_gateway_ip() -> str:
     return ""
 
 
+def ping_sweep(ips: List[str], timeout: float = PING_TIMEOUT,
+               max_workers: int = MAX_WORKERS) -> List[str]:
+    """ICMP/ARP ping 批量探测，快速筛出在线主机。"""
+    alive = []
+
+    def _ping_one(ip: str) -> Optional[str]:
+        try:
+            # Linux/macOS 用 ping -c 1 -W，Windows 用 ping -n 1 -w
+            if platform.system() == "Windows":
+                cmd = ["ping", "-n", "1", "-w", str(int(timeout * 1000)), ip]
+            else:
+                cmd = ["ping", "-c", "1", "-W", str(int(timeout)), ip]
+            proc = subprocess.run(
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=timeout + 0.2,
+            )
+            if proc.returncode == 0:
+                return ip
+        except Exception:
+            pass
+        return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_ping_one, ip): ip for ip in ips}
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                alive.append(result)
+
+    return alive
+
+
 def scan_port(ip: str, port: int, timeout: float = PORT_SCAN_TIMEOUT) -> bool:
     """扫描指定 IP 的端口是否开放"""
     try:
@@ -130,10 +168,17 @@ def scan_port(ip: str, port: int, timeout: float = PORT_SCAN_TIMEOUT) -> bool:
         return False
 
 
-def scan_ports_batch(ip: str, ports: List[int] = None) -> List[int]: # type: ignore
-    """批量扫描端口，返回开放的端口列表"""
+def scan_ports_batch(ip: str, ports: Optional[List[int]] = None,
+                     fast: bool = True) -> List[int]:  # type: ignore
+    """批量扫描端口，返回开放的端口列表。
+
+    Args:
+        ip: 目标 IP
+        ports: 待扫描端口列表，None 时使用 FAST_PORTS 或 COMMON_PORTS
+        fast: True 只扫 FAST_PORTS(2个)，False 扫 COMMON_PORTS(6个)
+    """
     if ports is None:
-        ports = COMMON_PORTS
+        ports = FAST_PORTS if fast else COMMON_PORTS
     
     open_ports = []
     
@@ -146,17 +191,100 @@ def scan_ports_batch(ip: str, ports: List[int] = None) -> List[int]: # type: ign
     return open_ports
 
 
+def _probe_esp32_cam(ip: str, port: int = 80,
+                      timeout: float = ESP32_PROBE_TIMEOUT) -> bool:
+    """探测是否为 ESP32-CAM 设备（多端点交叉验证）。
+    
+    ESP32-CAM CameraWebServer 固件独有特征组合：
+      - GET /capture 返回 JPEG 图片
+      - GET /status 返回传感器寄存器 JSON (含 0x34xx/0x35xx 地址)
+      - GET /stream 返回 multipart/x-mixed-replace (MJPEG)
+    
+    判定策略：多维度交叉验证，至少匹配 2 项才确认为 ESP32-CAM，
+    避免单一特征误判（其他 IP 摄像头也可能有 /capture 路径）。
+    """
+    base = f"http://{ip}:{port}"
+    scores = 0
+
+    # ---- 特征1: /capture 返回 JPEG 图片 ----
+    try:
+        r = requests.get(f"{base}/capture", timeout=timeout,
+                          proxies=_NO_PROXY)  # type: ignore[arg-type]
+        ct = r.headers.get("Content-Type", "")
+        if "image/jpeg" in ct:
+            scores += 2          # JPEG 是强特征，加权 2 分
+        elif "image" in ct and r.status_code == 200:
+            scores += 1          # 其他图片类型，弱特征
+    except Exception:
+        pass
+
+    # ---- 特征2: /status 返回 ESP32 传感器寄存器 JSON ----
+    #     CameraWebServer 的 /status 格式: {"0x3400":1606, "0x3500":12544, ...}
+    #     这些是 OV2640/OV3660 传感器的 I2C 寄存器地址，极具辨识度
+    try:
+        r = requests.get(f"{base}/status", timeout=timeout,
+                          proxies=_NO_PROXY)  # type: ignore[arg-type]
+        if r.status_code == 200 and r.headers.get("Content-Type", "").startswith(
+            ("application/json", "text/plain")
+        ):
+            text = r.text.strip()
+            # 检查 ESP32 CameraWebServer 特有的传感器寄存器模式
+            if any(pattern in text for pattern in (
+                '"0x3400"', '"0x3500"', '"0x5480"',   # OV2640/OV3660 寄存器
+                'led_control', 'xclk', 'frame_size',   # 控制字段
+            )):
+                scores += 2      # 寄存器 JSON 是最强特征，加权 2 分
+            elif any(kw in text.lower() for kw in (
+                "flash", "resolution", "brightness", "contrast"
+            )):
+                # 含摄像头参数词，但不带寄存器 — 中等置信度
+                scores += 1
+    except Exception:
+        pass
+
+    # ---- 特征3: /stream 返回 MJPEG 流 ----
+    try:
+        r = requests.get(
+            f"{base}/stream", timeout=timeout,
+            stream=True, headers={"Range": "bytes=0-1023"},
+            proxies=_NO_PROXY,  # type: ignore[arg-type]
+        )
+        ct = r.headers.get("Content-Type", "")
+        if "multipart" in ct or "mjpeg" in ct.lower():
+            scores += 1
+        r.close()
+    except Exception:
+        pass
+
+    # 至少需要 2 分（即至少一个强特征 + 一个弱特征，或两个中等特征）
+    return scores >= 2
+
+
 def identify_device(ip: str, open_ports: List[int] = None) -> Optional[Dict]: # type: ignore
     """识别 IP 设备的类型"""
     
     # 如果没有传入开放端口，先快速扫描
     if open_ports is None:
-        open_ports = scan_ports_batch(ip)
+        open_ports = scan_ports_batch(ip, fast=True)
+        if not open_ports:
+            # 快速模式没扫到，再用完整端口列表试一次
+            open_ports = scan_ports_batch(ip, fast=False)
     
     if not open_ports:
         return None
     
-    # 按优先级尝试识别
+    # ---- 0: ESP32-CAM 专用指纹探测（最高优先级）----
+    for port in open_ports:
+        if port in (80, 443, 8080, 8443):
+            if _probe_esp32_cam(ip, port=port):
+                return {
+                    "ip": ip,
+                    "type": "ESP32-CAM",
+                    "port": port,
+                    "info": "ESP32-CAM CameraWebServer",
+                }
+    
+    # ---- 1: 按优先级尝试 HTTP 识别 ----
     for port in open_ports:
         if port not in [80, 443, 8080, 8443, 5000, 3000]:
             continue
@@ -164,11 +292,10 @@ def identify_device(ip: str, open_ports: List[int] = None) -> Optional[Dict]: # 
         try:
             protocol = "https" if port in [443, 8443] else "http"
             url = f"{protocol}://{ip}:{port}/"
-            response = requests.get(url, timeout=HTTP_TIMEOUT)
+            response = requests.get(url, timeout=HTTP_TIMEOUT, proxies=_NO_PROXY)  # type: ignore[arg-type]
                 
             # 获取 HTTP 响应信息
             server = response.headers.get("Server", "")
-            content_type = response.headers.get("Content-Type", "")
             content = response.text.lower()
             
             # 检查是否为网关/路由器
@@ -237,7 +364,7 @@ class DeviceScanner:
         self._total_count = 0
     
     def start_scan(self, progress_callback: Optional[Callable[[int, int], None]] = None):
-        """开始扫描局域网设备 - 两阶段扫描优化"""
+        """开始扫描局域网设备 — 三阶段优化：ping → 端口 → 识别"""
         self.running = True
         self.found_devices.clear()
         self._scanned_count = 0
@@ -247,11 +374,9 @@ class DeviceScanner:
         start_num = int(start_ip.split('.')[-1])
         end_num = int(end_ip.split('.')[-1])
         
-        # 生成所有 IP
         network_prefix = '.'.join(get_local_ip().split('.')[:3])
         all_ips = [f"{network_prefix}.{i}" for i in range(start_num, end_num + 1)]
         
-        # 排除本机 IP 和网关 IP（已知不是设备）
         local_ip = get_local_ip()
         gateway_ip = get_gateway_ip()
         exclude_ips = [local_ip, gateway_ip, ""]
@@ -259,20 +384,31 @@ class DeviceScanner:
         
         self._total_count = len(all_ips)
         
-        # 使用线程池快速扫描
+        # ===== 阶段 1: Ping 探测筛出在线主机 =====
+        if progress_callback:
+            progress_callback(0, self._total_count)
+        alive_ips = ping_sweep(all_ips)
+        print(f"[扫描器] Ping 筛选: {len(all_ips)} IPs -> {len(alive_ips)} 在线")
+        
+        if not alive_ips or not self.running:
+            return self.found_devices
+        
+        # ===== 阶段 2: 对在线主机做快速端口扫描 =====
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # 提交所有端口扫描任务
             port_results = list(executor.map(
-                lambda ip: (ip, scan_ports_batch(ip)),
-                all_ips
+                lambda ip: (ip, scan_ports_batch(ip, fast=True)),
+                alive_ips
             ))
         
-        # 筛选出有开放端口的 IP
         active_ips = [(ip, ports) for ip, ports in port_results if ports]
-        completed = 0
+        print(f"[扫描器] 端口扫描: {len(alive_ips)} 活跃 -> {len(active_ips)} 有开放端口")
         
+        if not active_ips or not self.running:
+            return self.found_devices
+        
+        # ===== 阶段 3: 设备识别 =====
+        completed = 0
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # 提交所有识别任务
             futures = {
                 executor.submit(identify_device, ip, ports): ip 
                 for ip, ports in active_ips
@@ -281,7 +417,6 @@ class DeviceScanner:
             for future in concurrent.futures.as_completed(futures):
                 if not self.running:
                     break
-                    
                 completed += 1
                 
                 try:
@@ -298,7 +433,6 @@ class DeviceScanner:
                     progress_callback(completed, len(active_ips))
         
         print(f"[扫描器] 扫描完成，共发现 {len(self.found_devices)} 个设备")
-        
         return self.found_devices
     
     def stop(self):

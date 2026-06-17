@@ -3,25 +3,31 @@ import json
 from datetime import datetime
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTextEdit, QMessageBox
 from PyQt6.QtCore import QThread, pyqtSignal
-from device import DataGenerator
+from device import VirtualSensorDevice
 
 
-# 全局数据生成器（在应用启动时创建）
-data_generator = None
+# 全局虚拟传感器（在应用启动时创建）
+_virtual_sensor = None  # type: ignore[assignment]
 
 
-def init_data_generator(interval: float = 5.0):
-    """初始化并启动全局数据生成器"""
-    global data_generator
-    if data_generator is None:
-        data_generator = DataGenerator(interval=interval)
-        data_generator.start()
-    return data_generator
+def init_data_sensor(interval: float = 5.0):
+    """初始化并启动全局虚拟传感器（抽象基类统一接口）"""
+    global _virtual_sensor
+    if _virtual_sensor is None:
+        _virtual_sensor = VirtualSensorDevice(interval=interval)
+        _virtual_sensor.initialize()
+        _virtual_sensor.start()
+    return _virtual_sensor
 
 
-def get_data_generator() -> DataGenerator:
-    """获取全局数据生成器"""
-    return data_generator # type: ignore
+def get_data_sensor() -> VirtualSensorDevice:
+    """获取全局虚拟传感器"""
+    return _virtual_sensor  # type: ignore[return-value]
+
+
+# 向后兼容别名（保留旧名称供 main_window.py 调用）
+init_data_generator = init_data_sensor
+get_data_generator = get_data_sensor
 
 
 class BatchCollector:
@@ -137,20 +143,26 @@ class StartTaskThread(QThread):
             collector = BatchCollector(self.session_id, self.session_name, self.base_dir)
             batch_dir = collector.create_structure()
 
-            # 获取全局数据生成器
-            generator = get_data_generator()
+            # 通过抽象基类接口创建虚拟传感器
+            from device import VirtualSensorDevice
+            virtual_device = VirtualSensorDevice()
+            virtual_device.initialize()
 
             while self.running:
-                # 每次生成一条新数据并采集
-                data = generator.generate()
-                collector.add_data(
-                    sensor_id=data["data_subtype"].value,
-                    data_type=data["data_type"].value,
-                    value=data["data_value"],
-                    unit=data["unit"].value,
-                    is_uploaded=False
+                # 使用统一采集接口
+                records = virtual_device.collect_numeric_data(
+                    session_id=self.session_id,
                 )
-                self.collected_count += 1
+                for record in records:
+                    collector.add_data(
+                        sensor_id=record.data_subtype.value,
+                        data_type=record.data_type.value,
+                        value=record.data_value,
+                        unit="-",
+                        is_uploaded=False,
+                    )
+
+                self.collected_count += len(records)
 
                 # 发送进度
                 self.progress.emit(self.collected_count)

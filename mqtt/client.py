@@ -173,6 +173,10 @@ class DeviceMQTTClient:
         self._running: bool = False
         self._stop_event: Event = Event()
 
+        # 回调钩子（由 manager.py 的 _patch_callbacks 注入）
+        self._peer_status_callback: callable | None = None  # type: ignore[type-arg]
+        self._peer_offline_callback: callable | None = None   # type: ignore[type-arg]
+
     # -----------------------------------------------------------------
     # 回调
     # -----------------------------------------------------------------
