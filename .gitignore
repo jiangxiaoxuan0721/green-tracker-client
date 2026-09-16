@@ -44,6 +44,10 @@ reports/
 # mqtt_docker_example
 /mqtt_docker_example
 
+# 过程文档（仅本地留存，不入库）
+doc/plan.md
+doc/design.md
+
 # Python
 __pycache__/
 *.py[cod]

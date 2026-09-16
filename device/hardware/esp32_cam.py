@@ -21,6 +21,9 @@ from ..models.records import LocalFileRecord, LocalDataRecord
 # 局域网设备通信必须绕过系统代理（同 device_scanner.py 的原因）
 _NO_PROXY = {"http": None, "https": None}  # type: ignore
 
+# 设备类型标识 — registry 注册键与扫描器识别结果共用此单一来源
+DEVICE_TYPE_ESP32_CAM = "ESP32-CAM"
+
 
 class ESP32CameraDevice(AbstractBaseDevice):
     """ESP32-CAM 摄像头设备。"""
@@ -39,7 +42,7 @@ class ESP32CameraDevice(AbstractBaseDevice):
     def __init__(self, ip: str, port: int = DEFAULT_PORT):
         super().__init__()
         self.device_id = ip
-        self.device_type = "ESP32-CAM"
+        self.device_type = DEVICE_TYPE_ESP32_CAM
         self.is_virtual = False
 
         self.ip = ip
@@ -209,5 +212,4 @@ class ESP32CameraDevice(AbstractBaseDevice):
         return self._last_status
 
 
-# 向后兼容：保留旧名称别名
-ESP32CAM = ESP32CameraDevice
+__all__ = ["ESP32CameraDevice", "DEVICE_TYPE_ESP32_CAM"]

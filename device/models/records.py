@@ -1,4 +1,4 @@
-"""数据记录模型与本地存储。"""
+"""数据记录模型（本地采集记录的数据结构）。"""
 
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
@@ -57,84 +57,4 @@ class LocalFileRecord(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class DataStore:
-    """本地数据存储管理器（JSON 文件存储）。"""
-
-    def __init__(self, store_file: str = "data_store.json"):
-        import json
-        import os
-        self.store_file = store_file
-        self._ensure_file()
-
-    def _ensure_file(self):
-        import json
-        import os
-        if not os.path.exists(self.store_file):
-            os.makedirs(os.path.dirname(self.store_file) or ".", exist_ok=True)
-            with open(self.store_file, "w") as f:
-                json.dump({"numeric_data": [], "file_data": []}, f)
-
-    def _load(self) -> dict:
-        import json
-        try:
-            with open(self.store_file, "r") as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {"numeric_data": [], "file_data": []}
-
-    def _save(self, data: dict):
-        import json
-        with open(self.store_file, "w") as f:
-            json.dump(data, f, indent=2, default=str)
-
-    def save_numeric_record(self, record: LocalDataRecord) -> str:
-        data = self._load()
-        record_dict = record.model_dump()
-        data["numeric_data"].append(record_dict)
-        self._save(data)
-        return record.id
-
-    def save_file_record(self, record: LocalFileRecord) -> str:
-        data = self._load()
-        record_dict = record.model_dump()
-        data["file_data"].append(record_dict)
-        self._save(data)
-        return record.id
-
-    def get_pending_uploads(self) -> tuple:
-        data = self._load()
-        numeric_pending = [LocalDataRecord(**r) for r in data["numeric_data"] if not r.get("is_uploaded", False)]
-        file_pending = [LocalFileRecord(**r) for r in data["file_data"] if not r.get("is_uploaded", False)]
-        return numeric_pending, file_pending
-
-    def mark_numeric_uploaded(self, local_id: str, server_data_id: str):
-        data = self._load()
-        for r in data["numeric_data"]:
-            if r["id"] == local_id:
-                r["is_uploaded"] = True
-                r["upload_time"] = datetime.now().isoformat()
-                r["server_data_id"] = server_data_id
-                break
-        self._save(data)
-
-    def mark_file_uploaded(self, local_id: str, server_data_id: str, object_key: str, access_url: str):
-        data = self._load()
-        for r in data["file_data"]:
-            if r["id"] == local_id:
-                r["is_uploaded"] = True
-                r["upload_time"] = datetime.now().isoformat()
-                r["server_data_id"] = server_data_id
-                r["server_object_key"] = object_key
-                r["server_access_url"] = access_url
-                break
-        self._save(data)
-
-    def get_all_records(self) -> dict:
-        data = self._load()
-        return {
-            "numeric_data": [LocalDataRecord(**r) for r in data["numeric_data"]],
-            "file_data": [LocalFileRecord(**r) for r in data["file_data"]]
-        }
-
-
-__all__ = ["LocalDataRecord", "LocalFileRecord", "DataStore"]
+__all__ = ["LocalDataRecord", "LocalFileRecord"]

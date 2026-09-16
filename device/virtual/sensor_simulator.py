@@ -1,11 +1,12 @@
 """
 虚拟传感器设备 — 基于 AbstractBaseDevice 的虚拟执行单元实现。
 
-作为 DataGenerator 的重构版本，继承统一抽象范式，
-可通过 AbstractBaseDevice 接口被上层调度器无差别调用。
+继承统一抽象范式，可通过 AbstractBaseDevice 接口被上层调度器
+（如 device.collector.SessionCollector）无差别调用。
 """
 import random
 import threading
+import time
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 
@@ -52,6 +53,7 @@ class VirtualSensorDevice(AbstractBaseDevice):
         self.latest_data: Optional[Dict[str, Any]] = None
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
         self._generate_count = 0
 
         # 默认位置
@@ -167,11 +169,10 @@ class VirtualSensorDevice(AbstractBaseDevice):
                 self.collect_numeric_data(session_id="_background_")
             except Exception:
                 pass
-            # 使用事件等待以便快速响应 stop
-            for _ in range(int(self.interval * 10)):
-                if not self._running:
-                    return
-                time.sleep(0.1)
+            # 通过 Event.wait 既能正常退避 interval，又能在 stop() 调用时
+            # 被 set() 立刻唤醒，避免被 join(timeout=...) 长时间阻塞。
+            if self._stop_event.wait(self.interval):
+                return
 
     def _register_self(self):
         """注册到 DeviceStateManager。"""
@@ -193,10 +194,3 @@ class VirtualSensorDevice(AbstractBaseDevice):
     def get_latest_data(self) -> Optional[Dict[str, Any]]:
         with self._lock:
             return dict(self.latest_data) if self.latest_data else None
-
-
-# 向后兼容：保留旧名称别名
-DataGenerator = VirtualSensorDevice
-
-
-import time  # noqa: E402 — _bg_loop 需要

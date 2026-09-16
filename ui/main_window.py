@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (QFrame, QWidget, QVBoxLayout, QHBoxLayout, QPushBut
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
 from api import get_active_sessions
-from ui.task_window import init_data_generator
+from device.runtime import init_data_sensor
 from device import get_task_manager
 
 
@@ -315,7 +315,7 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         # 启动后台数据生成器（每5秒生成一次）
-        init_data_generator(interval=5.0)
+        init_data_sensor(interval=5.0)
         # 初始化时扫描设备
         self.scan_devices_on_init()
         # 自动启动 MQTT
@@ -383,18 +383,6 @@ class MainWindow(QWidget):
         layout = QVBoxLayout()
         layout.addWidget(self.stack)
         self.setLayout(layout)
-
-    def show_task_page(self, task):
-        if self.task_page is None:
-            from ui.task_window import TaskPage
-            self.task_page = TaskPage(task, self)
-            self.stack.addWidget(self.task_page)
-
-        # 更新任务数据
-        self.task_page.update_task(task)
-
-        # 切换到任务页面
-        self.stack.setCurrentWidget(self.task_page)
 
     def show_upload_page(self, task):
         if self.upload_page is None:

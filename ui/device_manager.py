@@ -524,11 +524,12 @@ class DeviceManagerPage(QWidget):
         if self.thread and self.thread.isRunning(): # type: ignore
             return
 
-        # 确保 DataGenerator 虚拟执行单元已注册
+        # 确保虚拟执行单元已注册
         try:
-            from ui.task_window import get_data_generator
-            gen = get_data_generator()
-            gen.ensure_registered()
+            from device.runtime import get_data_sensor
+            gen = get_data_sensor()
+            if gen is not None:
+                gen.ensure_registered()
         except Exception:
             pass
 

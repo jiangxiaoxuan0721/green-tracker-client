@@ -19,7 +19,7 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTextEdit, QLineEdit, QComboBox, QGroupBox, QScrollArea,
-    QSplitter, QFrame, QListWidgetItem, QListWidget,
+    QSplitter, QFrame, QListWidgetItem, QListWidget, QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor
@@ -200,6 +200,41 @@ class LogViewer(QTextEdit):
 
 
 # ============================================================
+# 执行结果格式化
+# ============================================================
+
+def _format_result(success: bool, result, error: str = "") -> str:
+    """把命令执行结果渲染为可读文本。
+
+    多行字段（`stdout` 等）按**真实换行**展开，避免 JSON 把 `\\n` 显示成字面量；
+    其余字段保持 `key: value`（嵌套结构用 JSON 单行）。
+    """
+    lines = [f"状态: {'成功' if success else '失败'}"]
+    if error:
+        lines.append(f"错误: {error}")
+
+    if isinstance(result, dict):
+        inline: list[str] = []
+        blocks: list[tuple[str, str]] = []
+        for key, value in result.items():
+            if isinstance(value, str) and ("\n" in value or "\r" in value):
+                blocks.append((key, value.replace("\r\n", "\n").replace("\r", "\n")))
+            else:
+                text = value if isinstance(value, str) \
+                    else json.dumps(value, ensure_ascii=False)
+                inline.append(f"{key}: {text}")
+        lines.extend(inline)
+        for key, value in blocks:
+            lines.append("")
+            lines.append(f"──── {key} ────")
+            lines.append(value.rstrip("\n") or "(空)")
+    elif result is not None:
+        lines.append(json.dumps(result, ensure_ascii=False, indent=2))
+
+    return "\n".join(lines)
+
+
+# ============================================================
 # 主面板
 # ============================================================
 
@@ -301,19 +336,14 @@ class MqttPanel(QWidget):
 
         main_layout.addLayout(toolbar)
 
-        # ===== 分割布局 =====
-        splitter = QSplitter(Qt.Orientation.Vertical)
+        # ===== 分割布局：左（信息 / 命令 / 日志）| 右（命令调试）=====
+        splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # --- 上部：状态 + 命令 ---
-        top_widget = QWidget()
-        top_layout = QHBoxLayout(top_widget)
-        top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.setSpacing(12)
-
-        # 左侧：设备信息 + 命令列表
+        # 左侧：设备信息 + 已注册命令 + 消息日志
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(12)
 
         # 客户端信息组
         info_group = QGroupBox("客户端信息")
@@ -344,7 +374,7 @@ class MqttPanel(QWidget):
             info_layout.addLayout(row)
             self.info_labels[key] = val_lbl
         info_layout.addStretch()
-        left_layout.addWidget(info_group, 1)
+        left_layout.addWidget(info_group, 0)
 
         # 已注册命令列表
         cmd_group = QGroupBox("已注册命令")
@@ -352,9 +382,36 @@ class MqttPanel(QWidget):
         self.cmd_list = QListWidget()
         self.cmd_list.setMaximumHeight(140)
         cmd_layout.addWidget(self.cmd_list)
-        left_layout.addWidget(cmd_group, 1)
+        left_layout.addWidget(cmd_group, 0)
 
-        top_layout.addWidget(left_panel, 1)
+        # --- 消息日志（放在已注册命令下方）---
+        log_group = QGroupBox("消息日志")
+        log_outer = QVBoxLayout(log_group)
+        self.log_viewer = LogViewer()
+        log_outer.addWidget(self.log_viewer, 1)
+
+        log_toolbar = QHBoxLayout()
+        btn_clear_log = QPushButton("清空日志")
+        btn_clear_log.setFixedHeight(32)
+        btn_clear_log.setMinimumWidth(90)
+        btn_clear_log.setStyleSheet(f"""
+            QPushButton {{
+                font-size: 13px;
+                padding: 6px 14px;
+                background-color: {C['card']};
+                color: {C['text']};
+                border: 2px solid {C['border']};
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{ background-color: {C['bg']}; border-color: {C['accent']}; }}
+        """)
+        btn_clear_log.clicked.connect(lambda: self.log_viewer.clear_log())
+        log_toolbar.addWidget(btn_clear_log)
+        log_toolbar.addStretch()
+        log_outer.addLayout(log_toolbar)
+
+        left_layout.addWidget(log_group, 1)
+        splitter.addWidget(left_panel)
 
         # 右侧：手动命令发送
         right_panel = QWidget()
@@ -436,58 +493,33 @@ class MqttPanel(QWidget):
         btn_row.addStretch()
         send_layout.addLayout(btn_row)
 
-        # 结果显示
+        # 结果显示：标题固定高度，剩余空间全部给结果面板
         result_label = QLabel("执行结果:")
-        result_label.setStyleSheet(f"margin-top: 8px;")
+        result_label.setFixedHeight(24)
+        result_label.setStyleSheet("margin-top: 8px;")
         send_layout.addWidget(result_label)
+
         self.result_view = QTextEdit()
-        self.result_view.setMaximumHeight(120)
         self.result_view.setReadOnly(True)
+        self.result_view.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        self.result_view.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self.result_view.setStyleSheet(f"""
             QTextEdit {{
                 background-color: {C['log_bg']};
                 color: {C['log_text']};
-                font-family: monospace;
+                font-family: 'JetBrains Mono', 'Consolas', monospace;
                 font-size: 12px;
             }}
         """)
-        send_layout.addWidget(self.result_view)
+        send_layout.addWidget(self.result_view, 1)
 
         right_layout.addWidget(send_group, 1)
-        top_layout.addWidget(right_panel, 1)
+        splitter.addWidget(right_panel)
 
-        splitter.addWidget(top_widget)
-
-        # --- 下部：日志查看器 ---
-        log_group = QGroupBox("消息日志")
-        log_outer = QVBoxLayout(log_group)
-        self.log_viewer = LogViewer()
-        log_outer.addWidget(self.log_viewer)
-
-        log_toolbar = QHBoxLayout()
-        btn_clear_log = QPushButton("清空日志")
-        btn_clear_log.setFixedHeight(32)
-        btn_clear_log.setMinimumWidth(90)
-        btn_clear_log.setStyleSheet(f"""
-            QPushButton {{
-                font-size: 13px;
-                padding: 6px 14px;
-                background-color: {C['card']};
-                color: {C['text']};
-                border: 2px solid {C['border']};
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{ background-color: {C['bg']}; border-color: {C['accent']}; }}
-        """)
-        btn_clear_log.clicked.connect(lambda: self.log_viewer.clear_log())
-        log_toolbar.addWidget(btn_clear_log)
-        log_toolbar.addStretch()
-        log_outer.addLayout(log_toolbar)
-
-        splitter.addWidget(log_group)
-
-        # 分割比例
-        splitter.setSizes([300, 250])
+        # 左右初始宽度比例
+        splitter.setSizes([560, 620])
 
         main_layout.addWidget(splitter, 1)
 
@@ -673,13 +705,9 @@ class MqttPanel(QWidget):
             self._show_result(False, None, f"发布失败: rc={pub_result.rc}")
 
     def _show_result(self, success: bool, result, error: str = ""):
-        """在结果区域显示执行结果。"""
-        text = json.dumps(
-            {"success": success, "result": result, "error": error},
-            ensure_ascii=False,
-            indent=2,
-        )
-        self.result_view.setPlainText(text)
+        """在结果区域显示执行结果（多行内容按真实换行渲染）。"""
+        self.result_view.setPlainText(_format_result(success, result, error))
+        self.result_view.moveCursor(self.result_view.textCursor().MoveOperation.Start)
 
     # -----------------------------------------------------------------
     # 刷新辅助

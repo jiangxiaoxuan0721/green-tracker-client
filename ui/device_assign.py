@@ -248,11 +248,12 @@ class DeviceAssignPage(QWidget):
         if self._is_destroyed:
             return
 
-        # 确保 DataGenerator 虚拟单元已注册
+        # 确保虚拟单元已注册
         try:
-            from ui.task_window import get_data_generator
-            gen = get_data_generator()
-            gen.ensure_registered()
+            from device.runtime import get_data_sensor
+            gen = get_data_sensor()
+            if gen is not None:
+                gen.ensure_registered()
         except Exception:
             pass
         # 如果有扫描线程正在运行，先不刷新

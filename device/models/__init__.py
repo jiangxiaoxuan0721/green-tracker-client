@@ -4,13 +4,13 @@
 子模块：
   - base         : 设备能力描述、采集结果容器
   - data_types   : DataType / DataSubType / DataUnit 枚举
-  - records      : LocalDataRecord / LocalFileRecord / DataStore
+  - records      : LocalDataRecord / LocalFileRecord
   - state        : DeviceStatus / DeviceInfo / DeviceStateManager
 """
 
 from .base import DeviceCapabilities, CaptureResult, CaptureBatch, DataCategory
 from .data_types import DataType, DataSubType, DataUnit, SUBTYPE_UNIT_MAP
-from .records import LocalDataRecord, LocalFileRecord, DataStore
+from .records import LocalDataRecord, LocalFileRecord
 from .state import (
     DeviceStatus,
     DeviceInfo,
@@ -32,7 +32,6 @@ __all__ = [
     # records
     "LocalDataRecord",
     "LocalFileRecord",
-    "DataStore",
     # state
     "DeviceStatus",
     "DeviceInfo",

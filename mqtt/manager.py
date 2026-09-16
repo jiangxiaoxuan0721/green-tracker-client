@@ -24,7 +24,6 @@ from PyQt6.QtCore import QObject, pyqtSignal, QThread
 from .client import (
     DeviceMQTTClient,
     create_mqtt_client,
-    get_mqtt_client,
     _get_local_ip,
 )
 from .commands import CommandHandler

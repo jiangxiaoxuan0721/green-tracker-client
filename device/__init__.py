@@ -4,10 +4,13 @@
 目录结构：
   device/
   ├── base.py              # AbstractBaseDevice 抽象基类（统一范式）
+  ├── registry.py          # DeviceRegistry：device_type → 设备工厂
+  ├── runtime.py           # 全局虚拟传感器单例
+  ├── collector.py         # SessionCollector：会话采集引擎
   ├── models/               # 数据类型 & 模型定义
   │   ├── base.py          # DeviceCapabilities / CaptureResult / CaptureBatch
   │   ├── data_types.py    # DataType / DataSubType / DataUnit
-  │   ├── records.py       # LocalDataRecord / LocalFileRecord / DataStore
+  │   ├── records.py       # LocalDataRecord / LocalFileRecord
   │   └── state.py         # DeviceStatus / DeviceInfo / DeviceStateManager
   ├── virtual/             # 虚拟设备实现
   │   └── sensor_simulator.py  # VirtualSensorDevice
@@ -42,7 +45,6 @@ from .models import (
     SUBTYPE_UNIT_MAP,
     LocalDataRecord,
     LocalFileRecord,
-    DataStore,
     DeviceStatus,
     DeviceInfo,
     DeviceStateManager,
@@ -57,12 +59,14 @@ from .models import (
 # 具体设备实现
 # ============================================================
 from .virtual import VirtualSensorDevice, VIRTUAL_UNIT_ID, VIRTUAL_UNIT_TYPE
-from .hardware import ESP32CameraDevice
+from .hardware import ESP32CameraDevice, DEVICE_TYPE_ESP32_CAM
 
-# 向后兼容别名（旧名称映射到新实现）
 # ============================================================
-DataGenerator = VirtualSensorDevice          # 旧 simu_sensor.DataGenerator → VirtualSensorDevice
-ESP32CAM = ESP32CameraDevice                 # 旧 esp32_cam.ESP32CAM → ESP32CameraDevice
+# 设备注册表与运行时（必须在具体设备之后导入）
+# ============================================================
+from .registry import DeviceRegistry, registry
+from .runtime import init_data_sensor, get_data_sensor, reset_data_sensor
+from .collector import SessionCollector
 
 # ============================================================
 # 工具模块
@@ -76,15 +80,17 @@ __all__ = [
     "AbstractBaseDevice",
     # 数据模型
     "DataType", "DataSubType", "DataUnit", "SUBTYPE_UNIT_MAP",
-    "LocalDataRecord", "LocalFileRecord", "DataStore",
+    "LocalDataRecord", "LocalFileRecord",
     "DeviceStatus", "DeviceInfo", "DeviceStateManager", "get_device_state_manager",
     "DeviceCapabilities", "CaptureResult", "CaptureBatch", "DataCategory",
     # 虚拟设备
     "VirtualSensorDevice", "VIRTUAL_UNIT_ID", "VIRTUAL_UNIT_TYPE",
     # 硬件设备
-    "ESP32CameraDevice",
-    # 向后兼容别名
-    "DataGenerator", "ESP32CAM",
+    "ESP32CameraDevice", "DEVICE_TYPE_ESP32_CAM",
+    # 注册表与运行时
+    "DeviceRegistry", "registry",
+    "init_data_sensor", "get_data_sensor", "reset_data_sensor",
+    "SessionCollector",
     # 工具
     "TaskManager", "task_manager", "get_task_manager",
     "DeviceScanner", "scan_devices", "get_local_ip", "get_gateway_ip",
