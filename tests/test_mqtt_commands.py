@@ -81,7 +81,7 @@ class TestBuiltinRegistration:
         expected = {"ping", "get_info", "reboot", "set_config",
                     "get_metrics", "list_commands", "cloud_probe",
                     "execute_shell", "terminal_reset", "terminal_interrupt",
-                    "terminal_resize", "terminal_info"}
+                    "terminal_info"}
         assert expected <= names
 
 

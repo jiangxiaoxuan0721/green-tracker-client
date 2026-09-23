@@ -1,0 +1,7 @@
+{
+  "execute_shell": true,
+  "terminal_reset": false,
+  "terminal_interrupt": false,
+  "reboot": false,
+  "set_config": false
+}

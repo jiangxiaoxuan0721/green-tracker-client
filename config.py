@@ -72,3 +72,32 @@ def collect_interval() -> float:
 def virtual_sensor_interval() -> float:
     """后台虚拟传感器上报间隔（秒）。"""
     return float(os.getenv("VIRTUAL_SENSOR_INTERVAL", "5.0"))
+
+
+# ============================================================
+# 指令启用开关（本地策略文件）
+# ============================================================
+COMMAND_POLICY_FILENAME = "command_policy.json"
+COMMAND_POLICY_FILE_ENV = "GREEN_TRACKER_COMMAND_POLICY_FILE"
+
+
+def project_root() -> str:
+    """项目根目录（config.py 所在目录）。"""
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def command_policy_file() -> str:
+    """指令启用策略 JSON 文件的路径，**每次调用重新解析**。
+
+    默认取仓库内 `config/command_policy.json`；部署方需要把策略放到仓库之外
+    （只读部署、多实例共用同一份策略等）时用环境变量覆盖路径：
+
+        GREEN_TRACKER_COMMAND_POLICY_FILE=/etc/green-tracker/command_policy.json
+
+    文件内容是扁平的 `{命令名: 是否启用}`，如
+    `{"execute_shell": false, "cloud_probe": true}`。
+    """
+    raw = (os.getenv(COMMAND_POLICY_FILE_ENV) or "").strip()
+    if raw:
+        return os.path.expanduser(raw)
+    return os.path.join(project_root(), "config", COMMAND_POLICY_FILENAME)

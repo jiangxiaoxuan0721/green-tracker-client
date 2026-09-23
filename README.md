@@ -50,10 +50,12 @@ green-tracker-client/
 │   ├── __init__.py           # 模块导出（含 announce_topic）
 │   ├── client.py             # 设备端 MQTT 客户端（announce/LWT/command/response）
 │   ├── manager.py            # 服务管理器（QThread 封装 + Qt 信号事件总线）
-│   ├── commands.py           # 命令处理器注册表（内置 ping/get_info/reboot/set_config/get_metrics/list_commands/cloud_probe/execute_shell/terminal_*）
+│   ├── commands.py           # 命令处理器注册表（内置命令 + 公有/拓展预设与启用开关）
 │   ├── terminal.py           # 常驻 PTY 终端（execute_shell 的真实环境后端）
 │   └── topics.py             # Topic 定义常量（4 层通配，支持 announce）
-├── tests/                   # pytest 测试（346 条）
+├── config/                  # 本地配置（非代码）
+│   └── command_policy.json   # 指令启用开关：{命令名: 是否启用}，优先级最高
+├── tests/                   # pytest 测试（456 条）
 └── ui/                      # PyQt6 图形界面
     ├── main_window.py        # 主窗口（仅做导航装配）
     ├── device_manager.py     # 设备管理页面（TCP 探测 + 心跳刷新）
@@ -161,25 +163,102 @@ on_connect 回调:
 
 #### 内置命令
 
-| 命令 | 说明 | 参数 | 返回 |
-|------|------|------|------|
-| `ping` | 心跳检测 | 无 | `{pong, timestamp, uptime}` |
-| `get_info` | 设备信息 | 无 | `{device_id, hostname, platform, local_ip}` |
-| `reboot` | 重启设备 | `delay`(秒) | `{message, delay}` |
-| `set_config` | 设置配置 | `key`, `value` | `{message, key, value}` |
-| `get_metrics` | 运行指标 | 无 | `{cpu_usage, memory_usage, temperature, uptime_seconds}` |
-| `list_commands` | **命令列表** | 无 | `{commands: [...]}` |
-| `execute_shell` | **远程执行 Shell**（高危，见下方说明） | `command`, `reset?`, `timeout?`, `cwd?`, `max_output?` | `{exit_code, stdout, stderr, ok, timed_out, duration, cwd, user, shell, tty, backend, restarted}` |
-| `terminal_reset` | 重启远程终端（清空全部状态） | 无 | `{restarted, backend, message}` |
-| `terminal_interrupt` | 向终端前台发送 Ctrl+C | 无 | `{interrupted, message}` |
-| `terminal_resize` | 调整终端窗口尺寸 | `rows?`(默认 24), `cols?`(默认 200) | `{rows, cols}` |
-| `terminal_info` | 查询终端状态 | 无 | `{shell, pid, alive, tty, backend, rows, cols, cwd, uptime_seconds}` |
-| `revoke_control` | **系统指令**：云端撤销控制权限 | `reason?` | `{message, reason, revoked}` —— 设备立即停止受控并重新签到 |
+`分类` 一列即指令预设关键字：`公有` = 跨平台通用契约，`拓展` = 能力可选、由平台侧按需开关。
+
+| 命令 | 分类 | 预设启用 | 说明 | 参数 | 返回 |
+|------|------|----------|------|------|------|
+| `ping` | 公有 | 是（不可禁用） | 心跳检测 | 无 | `{pong, timestamp, uptime}` |
+| `get_info` | 公有 | 是 | 设备信息 | 无 | `{device_id, hostname, platform, local_ip}` |
+| `get_metrics` | 公有 | 是 | 运行指标 | 无 | `{cpu_usage, memory_usage, temperature, uptime_seconds}` |
+| `reboot` | 公有 | 是 | 重启设备 | `delay`(秒) | `{message, delay}` |
+| `list_commands` | 公有 | 是（不可禁用） | **命令列表 + 各指令元数据** | 无 | `{commands: [...], specs: [...]}` |
+| `revoke_control` | 公有 | 是（不可禁用） | **系统指令**：云端撤销控制权限 | `reason?` | `{message, reason, revoked}` —— 设备立即停止受控并重新签到 |
+| `set_config` | 拓展 | 是 | 设置配置（占位实现） | `key`, `value` | `{message, key, value}` |
+| `cloud_probe` | 拓展 | 是 | 云端探测（验证发现链路） | 无 | `{probe_response, device_id, timestamp, note}` |
+| `execute_shell` | 拓展 | 是 | **远程执行 Shell**（高危，见下方说明） | `command`, `reset?`, `timeout?`, `cwd?`, `max_output?` | `{exit_code, stdout, stderr, ok, timed_out, duration, cwd, user, shell, tty, backend, restarted}` |
+| `terminal_reset` | 拓展 | 是 | 重启远程终端（清空全部状态） | 无 | `{restarted, backend, message}` |
+| `terminal_interrupt` | 拓展 | 是 | 向终端前台发送 Ctrl+C | 无 | `{interrupted, message}` |
+| `terminal_info` | 拓展 | 是 | 查询终端状态 | 无 | `{shell, pid, alive, tty, backend, rows, cols, cwd, uptime_seconds}` |
 
 云端 / Agent 的完整对接说明（报文格式、参数与返回字段、超时与中断语义、最佳实践）
 见 **[`doc/terminal_commands.md`](doc/terminal_commands.md)**。
 
-云端通过下发 `list_commands` 可动态获取设备支持的完整能力列表。
+云端通过下发 `list_commands` 可动态获取设备支持的完整能力列表：
+
+```json
+{
+  "commands": ["ping", "get_info", "..."],
+  "specs": [
+    {"name": "ping", "visibility": "public", "enabled": true,
+     "default_enabled": true, "description": "...", "source": "default"},
+    {"name": "execute_shell", "visibility": "extension", "enabled": false,
+     "default_enabled": true, "description": "...", "source": "cloud"}
+  ]
+}
+```
+
+- `commands` —— 当前**启用**的命令名（老字段，语义不变）
+- `specs` —— 全部指令的元数据（**含已禁用的**），供平台侧渲染开关
+  - `visibility`：`public` 公有 / `extension` 拓展
+  - `enabled`：当前是否可用；`default_enabled`：代码内预设值
+  - `source`：当前值来自 `default`（预设）/ `cloud`（平台下发）/ `file`（本地策略文件）
+
+#### 指令预设与启用开关
+
+每条指令在注册时用 `enabled` 关键字声明**默认是否启用**，其他平台无需改本仓库代码
+即可做拓展配置。启用判定按**后者覆盖前者**：
+
+| 层级 | 来源 | 用途 |
+|------|------|------|
+| 1 | 注册时的 `enabled` | 代码内预设（本仓库给出的默认值） |
+| 2 | `CommandHandler.apply_policy({...})` | 云端 / 其他平台运行时下发的策略 |
+| 3 | `config/command_policy.json` | 本地部署方的**最终否决权** |
+
+```json
+// config/command_policy.json —— 关掉高危远程终端、打开探测
+{
+  "execute_shell": false,
+  "terminal_reset": false,
+  "cloud_probe": true
+}
+```
+
+文件默认取 `<项目根>/config/command_policy.json`；需要放到仓库之外（只读部署、
+多实例共用同一份策略）时用环境变量覆盖路径：
+
+```bash
+# .env
+GREEN_TRACKER_COMMAND_POLICY_FILE=/etc/green-tracker/command_policy.json
+```
+
+改文件后**无需重启**：按 `路径 + mtime + 大小` 缓存，保存即生效；文件缺失等同于
+「不覆盖任何预设」，内容非法则记 WARNING 并整体忽略。
+
+仓库内这份默认文件按**保守基线**关闭了高危与破坏性指令
+（`terminal_reset` / `terminal_interrupt` / `reboot` / `set_config`）；
+需要开启时把对应项改为 `true`，或直接删掉该行（即回到代码预设）。
+
+```python
+# 其他平台运行时下发（MQTTService 亦有同名入口）
+from mqtt.commands import CommandHandler
+CommandHandler.apply_policy({"execute_shell": False})   # 返回实际生效的部分
+CommandHandler.reset_policy()                            # 回到预设 + 本地策略文件
+```
+
+约束：
+
+- 未启用的命令在 MQTT / HTTP 轮询 / 面板本地调试**三条入口**一律拒绝
+  （`error = "命令已被禁用: xxx"`），且不出现在 `list_commands` 的 `commands` 中
+- `ping` / `list_commands` / `revoke_control` 是维持链路必需的公有指令，
+  **不允许**被任何策略禁用（对应项会被忽略并记 WARNING）
+- 拓展指令注册示例：
+
+```python
+@CommandHandler.register("my_probe", visibility="extension", enabled=False,
+                         description="默认关闭的自定义探测")
+def cmd_my_probe(params: dict) -> dict:
+    ...
+```
 
 #### `execute_shell` 说明
 

@@ -9,7 +9,12 @@
 
 from .client import DeviceMQTTClient, create_mqtt_client, get_mqtt_client
 from .manager import MQTTService, MQTTSignals
-from .commands import CommandHandler
+from .commands import (
+    CommandHandler,
+    CommandSpec,
+    VISIBILITY_PUBLIC,
+    VISIBILITY_EXTENSION,
+)
 from . import terminal
 from .terminal import Terminal, get_terminal
 from .topics import (
@@ -34,6 +39,9 @@ __all__ = [
     "MQTTSignals",
     # 命令 & Topic
     "CommandHandler",
+    "CommandSpec",
+    "VISIBILITY_PUBLIC",
+    "VISIBILITY_EXTENSION",
     "TOPIC_PREFIX",
     "status_topic",
     "response_topic",

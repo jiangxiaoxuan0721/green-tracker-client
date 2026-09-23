@@ -182,12 +182,6 @@ class TestTerminalCommands:
         assert body["shell"]
         assert body["rows"] > 0 and body["cols"] > 0
 
-    def test_terminal_resize_command(self):
-        body = CommandHandler.execute("terminal_resize", {"rows": 30, "cols": 100})["result"]
-        assert body["rows"] == 30
-        assert body["cols"] == 100
-        assert self._run("stty size")["stdout"].strip() == "30 100"
-
     def test_timeout_is_capped(self, monkeypatch):
         """超时仍被收敛到上限，避免阻塞 MQTT 网络线程。"""
         captured = {}

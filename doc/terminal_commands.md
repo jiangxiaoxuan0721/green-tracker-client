@@ -78,15 +78,41 @@ green-tracker/device/{device_id}/announce
 
 ## 3. 命令一览
 
-| 命令 | 作用 | 参数 |
-|------|------|------|
-| `list_commands` | 发现设备支持的所有命令名 | 无 |
-| `ping` | 心跳探活 | 无 |
-| `execute_shell` | 在常驻终端执行一条命令行 | `command`, `timeout?`, `cwd?`, `max_output?`, `reset?` |
-| `terminal_reset` | 重启终端，清空全部累积状态 | 无 |
-| `terminal_interrupt` | 向终端前台发 Ctrl+C | 无 |
-| `terminal_resize` | 调整终端窗口尺寸 | `rows?`(默认 24), `cols?`(默认 200) |
-| `terminal_info` | 查询终端状态 | 无 |
+`分类` = 指令预设关键字：`公有` 是跨平台通用契约，`拓展` 是可选能力、由平台侧按需开关。
+
+| 命令 | 分类 | 作用 | 参数 |
+|------|------|------|------|
+| `list_commands` | 公有 | 发现设备支持的命令名 **与各指令元数据** | 无 |
+| `ping` | 公有 | 心跳探活 | 无 |
+| `execute_shell` | 拓展 | 在常驻终端执行一条命令行 | `command`, `timeout?`, `cwd?`, `max_output?`, `reset?` |
+| `terminal_reset` | 拓展 | 重启终端，清空全部累积状态 | 无 |
+| `terminal_interrupt` | 拓展 | 向终端前台发 Ctrl+C | 无 |
+| `terminal_info` | 拓展 | 查询终端状态 | 无 |
+
+### 3.1 能力发现与启用开关
+
+`list_commands` 的返回体同时给出「可用清单」和「全部元数据」：
+
+```json
+{
+  "commands": ["ping", "get_info", "..."],
+  "specs": [
+    {"name": "ping", "visibility": "public", "enabled": true,
+     "default_enabled": true, "description": "...", "source": "default"},
+    {"name": "execute_shell", "visibility": "extension", "enabled": false,
+     "default_enabled": true, "description": "...", "source": "cloud"}
+  ]
+}
+```
+
+- `commands`：当前**启用**的命令名（老字段，语义不变）—— 只下发这里出现的命令
+- `specs`：全部指令（含已禁用的）的元数据，供平台侧渲染开关
+  - `visibility`：`public` 公有 / `extension` 拓展
+  - `enabled`：当前是否可用；`default_enabled`：代码内预设值
+  - `source`：`default` 预设 / `cloud` 平台下发 / `file` 本地策略文件
+    （`config/command_policy.json`，路径可用 `GREEN_TRACKER_COMMAND_POLICY_FILE` 覆盖）
+- 下发被禁用的命令会得到 `success=false`、`error="命令已被禁用: xxx"`
+- `ping` / `list_commands` / `revoke_control` 为维持链路所必需，不可被禁用
 
 > 远程 shell 可被 `.env` 中的 `GREEN_TRACKER_ENABLE_SHELL=false` 整体关闭；
 > 关闭后 `execute_shell` / `terminal_reset` 直接返回 `success=false`，
@@ -181,6 +207,7 @@ green-tracker/device/{device_id}/announce
 | `timeout 必须是数字` / `timeout 必须为正数` | 参数类型/取值非法 |
 | `cwd 不是有效目录: xxx` | 目录在设备本机不存在 |
 | `execute_shell 已被禁用（GREEN_TRACKER_ENABLE_SHELL=false）` | 设备关闭了远程 shell |
+| `命令已被禁用: xxx` | 该指令未启用（预设关闭 / 被平台策略或本地策略文件关闭） |
 | `未知命令: xxx` | 命令名未注册 |
 
 ---
@@ -209,17 +236,6 @@ green-tracker/device/{device_id}/announce
 
 `interrupted=false` 表示终端当前没有在运行（无需中断）；无 PTY 平台返回
 `{"interrupted": false, "message": "当前平台无 PTY 终端，无需中断"}`。
-
-### `terminal_resize`
-
-调整窗口尺寸（影响 `ls` 分栏、`COLUMNS/LINES` 相关程序）。默认 `24 x 200`。
-
-```json
-{"command_id": "r1", "command": "terminal_resize", "params": {"rows": 40, "cols": 120}}
-```
-```json
-{"success": true, "result": {"rows": 40, "cols": 120}}
-```
 
 ### `terminal_info`
 

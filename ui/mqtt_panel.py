@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QSplitter, QFrame, QListWidgetItem, QListWidget, QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QFont, QColor, QTextOption
 
 from api.cloud_state import get_cloud_state
 from mqtt.manager import MQTTService
@@ -291,6 +291,9 @@ class MqttPanel(QWidget):
         self._cloud_events: list = []
         self._cloud_state.add_listener(self._on_cloud_state_changed)
 
+        # 最近一次渲染的命令签名，用于判断是否需要重建命令列表
+        self._cmd_signature: tuple = ()
+
         self._init_ui()
         self._connect_signals()
 
@@ -298,6 +301,12 @@ class MqttPanel(QWidget):
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._refresh_info)
         self._refresh_timer.start(10000)
+
+        # 定时器：命令的启用状态可能在运行时被改变（云端下发策略、本地策略文件改盘），
+        # 定期比对「命令签名」，只在真的变了才重建列表，避免频繁刷新干扰下拉框输入
+        self._cmd_poll_timer = QTimer(self)
+        self._cmd_poll_timer.timeout.connect(self._refresh_commands_if_changed)
+        self._cmd_poll_timer.start(2000)
 
         # 定时器：定期轮询连接状态（解决无网络→有网络后状态不同步的问题）
         self._status_poll_timer = QTimer(self)
@@ -541,7 +550,11 @@ class MqttPanel(QWidget):
 
         self.result_view = QTextEdit()
         self.result_view.setReadOnly(True)
-        self.result_view.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        # 按控件宽度换行：优先在词边界断开，超长无空格行（JSON / base64）直接硬断，
+        # 保证结果始终落在可视宽度内，不出现横向滚动条
+        self.result_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.result_view.setWordWrapMode(
+            QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         self.result_view.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -753,9 +766,35 @@ class MqttPanel(QWidget):
     # 刷新辅助
     # -----------------------------------------------------------------
 
+    def _command_signature(self) -> tuple:
+        """当前命令表的快照签名 —— 用于判断是否需要重建列表。
+
+        启用状态可能在运行时被改变：云端下发策略、本地策略文件被改盘。
+        签名包含 visibility / enabled / source，任一变化都会触发重建。
+        """
+        return tuple(
+            (s["name"], s["visibility"], s["enabled"], s["source"])
+            for s in self.service.describe_commands()
+        )
+
+    def _refresh_commands_if_changed(self):
+        """只在命令签名变化时刷新，避免无谓重建干扰用户输入。"""
+        try:
+            signature = self._command_signature()
+        except Exception:  # 防御：服务未就绪时不做任何事
+            return
+        if signature != self._cmd_signature:
+            self._refresh_commands()
+
     def _refresh_commands(self):
-        """刷新已注册命令列表。"""
+        """刷新已注册命令列表。
+
+        下拉框只给**当前启用**的命令；左侧清单列出全部，并标注
+        公有 / 拓展 与 是否已启用（禁用的置灰）。
+        """
         commands = self.service.list_available_commands()
+        specs = {s["name"]: s for s in self.service.describe_commands()}
+        all_commands = self.service.list_available_commands(include_disabled=True)
 
         # 保存用户输入
         current = self.combo_command.currentText().strip() if self.combo_command.count() > 0 else ""
@@ -781,12 +820,22 @@ class MqttPanel(QWidget):
         finally:
             self.combo_command.blockSignals(False)
 
-        # 刷新左侧命令列表
+        # 刷新左侧命令列表（含已禁用的，便于排查配置）
         self.cmd_list.clear()
-        for cmd_name in commands:
-            item = QListWidgetItem(cmd_name)
-            item.setForeground(QColor(C["accent"]))
+        for cmd_name in all_commands:
+            spec = specs.get(cmd_name, {})
+            enabled = spec.get("enabled", True)
+            visibility = spec.get("visibility", "extension")
+            tag = "公有" if visibility == "public" else "拓展"
+            label = f"{cmd_name}  [{tag}]" + ("" if enabled else "  [已禁用]")
+            item = QListWidgetItem(label)
+            item.setForeground(QColor(C["accent"] if enabled else C["text_sub"]))
+            item.setData(Qt.ItemDataRole.UserRole, cmd_name)
+            item.setToolTip(spec.get("description", ""))
             self.cmd_list.addItem(item)
+
+        # 记录本次渲染的签名，供定时轮询比对
+        self._cmd_signature = self._command_signature()
 
     def _refresh_info(self):
         """刷新设备信息显示。"""

@@ -27,7 +27,7 @@ from .client import (
     create_mqtt_client,
     _get_local_ip,
 )
-from .commands import CommandHandler
+from .commands import CommandHandler, VISIBILITY_EXTENSION
 from .topics import status_topic as _status_topic, command_topic as _command_topic, response_topic as _response_topic
 
 logger = logging.getLogger("mqtt-manager")
@@ -346,13 +346,27 @@ class MQTTService:
                 pass
         return result
 
-    def list_available_commands(self) -> list:
-        """列出所有已注册的可用命令。"""
-        return CommandHandler.list_commands()
+    def list_available_commands(self, include_disabled: bool = False) -> list:
+        """列出命令名（默认只列当前启用的）。"""
+        return CommandHandler.list_commands(include_disabled=include_disabled)
 
-    def register_command_handler(self, name: str, handler: Callable):
-        """动态注册自定义命令处理器。"""
-        CommandHandler._registry[name] = handler
+    def describe_commands(self) -> list:
+        """列出全部指令的元数据（visibility / enabled / description / source）。
+
+        供平台侧做拓展配置：据此渲染「哪些指令可开、哪些已关」。
+        """
+        return CommandHandler.describe_commands()
+
+    def apply_command_policy(self, policy: dict, *, source: str = "cloud") -> dict:
+        """应用云端 / 其他平台下发的启用策略，如 {"execute_shell": false}。"""
+        return CommandHandler.apply_policy(policy, source=source)
+
+    def register_command_handler(self, name: str, handler: Callable, *,
+                                 visibility: str = VISIBILITY_EXTENSION,
+                                 enabled: bool = True, description: str = ""):
+        """动态注册自定义命令处理器（可声明公有/拓展与默认启用）。"""
+        CommandHandler.register(name, visibility=visibility, enabled=enabled,
+                                description=description)(handler)
         logger.info(f"已注册自定义命令: {name}")
 
     def publish_custom_message(self, topic: str, payload: dict, qos: int = 1):

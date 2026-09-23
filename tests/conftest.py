@@ -20,11 +20,15 @@ def isolate_environment(tmp_path, monkeypatch):
 
     - 避免测试污染真实的 ~/green_tracker_data
     - 重置 DeviceStateManager 单例，保证用例之间相互隔离
+    - 指令启用策略指向临时目录下的**不存在**文件：测试结果不随仓库内
+      config/command_policy.json 的改动而变化（该文件是真实生效的默认策略）
     """
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     # 测试期间禁止真实云端签到（避免打到本地/线上后端并污染能力状态）
     monkeypatch.setenv("GREEN_TRACKER_HEARTBEAT", "0")
+    monkeypatch.setenv("GREEN_TRACKER_COMMAND_POLICY_FILE",
+                       str(tmp_path / "command_policy.json"))
 
     try:
         import device.models.state as state_mod

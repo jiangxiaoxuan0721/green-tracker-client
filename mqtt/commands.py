@@ -14,8 +14,11 @@ import subprocess
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from config import command_policy_file
 
 from api import heartbeat as _heartbeat
 from api.cloud_state import get_cloud_state
@@ -31,21 +34,258 @@ REVOKE_BLOCKED_MESSAGE = "控制权限已被云端撤销，仅保留连接相关
 NO_CONTROL_MESSAGE = "云端未向本设备开放控制能力（等下次签到结果变化）"
 
 
+# ============================================================
+# 指令预设元数据：公有 / 拓展 + 启用开关
+#
+# * visibility="public"    —— 公有指令：跨平台通用契约，任何接入方都可依赖
+# * visibility="extension" —— 拓展指令：能力可选，由平台侧按需开关
+#
+# 每条指令在注册时用一个关键字声明「默认是否启用」（enabled），
+# 其他平台即可据此做拓展配置，无需改动本仓库代码。启用判定按
+# **后者覆盖前者**：
+#
+#   1. 注册时声明的 enabled          —— 代码内预设（本仓库给出的默认值）
+#   2. apply_command_policy(...)     —— 云端 / 其他平台运行时下发的策略
+#   3. 本地策略文件                  —— 部署方的最终否决权
+#      config/command_policy.json，路径可用
+#      GREEN_TRACKER_COMMAND_POLICY_FILE 覆盖
+#
+# 例：关闭高危远程终端（config/command_policy.json）
+#   {"execute_shell": false, "terminal_reset": false, "cloud_probe": true}
+# ============================================================
+
+VISIBILITY_PUBLIC = "public"
+VISIBILITY_EXTENSION = "extension"
+
+# 维持链路所必需的公有指令 —— 不允许被任何外部策略禁用（否则设备不可恢复）
+PROTECTED_COMMANDS = frozenset({"ping", "list_commands", "revoke_control"})
+
+DISABLED_MESSAGE = "命令已被禁用: {name}"
+
+_TRUE_WORDS = ("1", "true", "yes", "on", "enable", "enabled")
+_FALSE_WORDS = ("0", "false", "no", "off", "disable", "disabled")
+
+
+@dataclass
+class CommandSpec:
+    """一条指令预设的元数据（不含处理函数本身）。"""
+
+    name: str
+    visibility: str = VISIBILITY_EXTENSION
+    default_enabled: bool = True
+    description: str = ""
+
+
+def _as_bool(raw: object) -> Optional[bool]:
+    """把外部配置值收敛为 bool；无法识别返回 None（表示忽略该项）。"""
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    if isinstance(raw, str):
+        text = raw.strip().lower()
+        if text in _TRUE_WORDS:
+            return True
+        if text in _FALSE_WORDS:
+            return False
+    return None
+
+
+def _first_line(doc: Optional[str]) -> str:
+    """取文档字符串首行作为默认描述。"""
+    for line in (doc or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _parse_policy_file(path: str) -> Dict[str, bool]:
+    """读取本地策略文件，解析成 {命令名: 是否启用}。
+
+    文件缺失 = 不覆盖任何预设（不是错误）；内容非法则记 WARNING 并整体忽略。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = fh.read()
+    except FileNotFoundError:
+        logger.debug("策略文件不存在，沿用预设: %s", path)
+        return {}
+    except OSError as e:
+        logger.warning("策略文件读取失败，已忽略: %s (%s)", path, e)
+        return {}
+
+    if not raw.strip():
+        return {}
+
+    try:
+        parsed = json.loads(raw)
+    except ValueError as e:
+        logger.warning("策略文件不是合法 JSON，已忽略: %s (%s)", path, e)
+        return {}
+
+    if not isinstance(parsed, dict):
+        logger.warning("策略文件应为 {命令名: 是否启用} 对象，已忽略: %s", path)
+        return {}
+
+    policy: Dict[str, bool] = {}
+    for name, value in parsed.items():
+        if name in PROTECTED_COMMANDS and not _as_bool(value):
+            logger.warning("公有基础指令不允许被禁用，已忽略: %s", name)
+            continue
+        flag = _as_bool(value)
+        if flag is None:
+            logger.warning("策略项无法识别，已忽略: %s=%r", name, value)
+            continue
+        policy[str(name)] = flag
+
+    if policy:
+        logger.info("[command-policy] 载入本地策略 %s: %s", path, policy)
+    return policy
+
+
 class CommandHandler:
-    """命令处理器：管理命令名称到处理函数的映射。"""
+    """命令处理器：管理命令名称到处理函数的映射，及其预设元数据。"""
 
     _registry: Dict[str, Callable[[dict], dict]] = {}
+    # 指令预设元数据（公有/拓展 + 默认启用关键字），与 _registry 一一对应
+    _specs: Dict[str, CommandSpec] = {}
+    # 云端 / 其他平台运行时下发的启用策略（见 apply_command_policy）
+    _policy: Dict[str, bool] = {}
+    # 本地策略文件缓存: (路径, mtime, 大小, 解析结果)
+    _file_cache: Optional[Tuple[str, float, int, Dict[str, bool]]] = None
 
     @classmethod
-    def register(cls, command_name: str) -> Callable:
-        """装饰器：将函数注册为指定命令的处理器。"""
+    def register(cls, command_name: str, *, visibility: str = VISIBILITY_EXTENSION,
+                 enabled: bool = True, description: str = "") -> Callable:
+        """
+        装饰器：将函数注册为指定命令的处理器，并声明其预设元数据。
+
+        Args:
+            command_name: 命令名
+            visibility:   "public"（公有指令，跨平台通用契约）
+                          或 "extension"（拓展指令，按平台需要开关）
+            enabled:      预设是否启用 —— 其他平台据此做拓展配置的默认值
+            description:  简短说明，随 list_commands 一起暴露给平台侧
+        """
 
         def decorator(func: Callable[[dict], dict]) -> Callable:
             cls._registry[command_name] = func
-            logger.debug(f"已注册命令: {command_name}")
+            cls._specs[command_name] = CommandSpec(
+                name=command_name,
+                visibility=visibility,
+                default_enabled=enabled,
+                description=description or _first_line(func.__doc__),
+            )
+            logger.debug("已注册命令: %s (visibility=%s, enabled=%s)",
+                         command_name, visibility, enabled)
             return func
 
         return decorator
+
+    # -----------------------------------------------------------------
+    # 启用开关（预设 < 云端策略 < 本地策略文件）
+    # -----------------------------------------------------------------
+
+    @classmethod
+    def is_enabled(cls, command: str) -> bool:
+        """该命令当前是否可用（综合预设、云端策略与本地策略文件）。"""
+        file_policy = cls._file_policy()
+        if command in file_policy:
+            return file_policy[command]
+        if command in cls._policy:
+            return cls._policy[command]
+        spec = cls._specs.get(command)
+        return spec.default_enabled if spec else True
+
+    @classmethod
+    def apply_policy(cls, policy: Optional[dict], *, source: str = "cloud") -> Dict[str, bool]:
+        """
+        应用外部下发的启用策略，如 {"execute_shell": false, "cloud_probe": true}。
+
+        公有基础指令（PROTECTED_COMMANDS）不可被禁用，对应项会被忽略。
+        返回实际生效的部分。
+
+        优先级：预设 < 本策略 < 本地策略文件（部署方保留最终否决权）。
+        """
+        applied: Dict[str, bool] = {}
+        for name, raw in (policy or {}).items():
+            if not isinstance(name, str):
+                continue
+            flag = _as_bool(raw)
+            if flag is None:
+                logger.warning("策略项无法识别，已忽略: %s=%r", name, raw)
+                continue
+            if name in PROTECTED_COMMANDS and not flag:
+                logger.warning("公有基础指令不允许被禁用，已忽略: %s", name)
+                continue
+            cls._policy[name] = flag
+            applied[name] = flag
+
+        if applied:
+            logger.info("[command-policy] 应用 %s 策略: %s", source, applied)
+        return applied
+
+    @classmethod
+    def reset_policy(cls) -> None:
+        """清空运行时下发的策略（回到预设 + 本地策略文件）。"""
+        cls._policy = {}
+
+    @classmethod
+    def _file_policy(cls) -> Dict[str, bool]:
+        """本地策略文件（按路径 + mtime + 大小缓存，改文件后立即生效）。"""
+        path = command_policy_file()
+        try:
+            stat = os.stat(path)
+        except OSError:
+            # 文件不存在：与「空策略」等价，避免每次调用都打日志
+            cache = (path, -1.0, -1, {})
+            cls._file_cache = cache
+            return cache[3]
+
+        stamp = (path, stat.st_mtime, stat.st_size)
+        cached = cls._file_cache
+        if cached is not None and cached[:3] == stamp:
+            return cached[3]
+
+        parsed = _parse_policy_file(path)
+        cls._file_cache = (*stamp, parsed)
+        return parsed
+
+    # -----------------------------------------------------------------
+    # 能力发现
+    # -----------------------------------------------------------------
+
+    @classmethod
+    def list_commands(cls, include_disabled: bool = False) -> list:
+        """列出命令名；默认只列当前启用的（供云端动态发现）。"""
+        if include_disabled:
+            return list(cls._registry.keys())
+        return [name for name in cls._registry if cls.is_enabled(name)]
+
+    @classmethod
+    def describe(cls, command: str) -> dict:
+        """单条指令的元数据快照（供平台侧做拓展配置）。"""
+        spec = cls._specs.get(command)
+        if command in cls._file_policy():
+            source = "file"
+        elif command in cls._policy:
+            source = "cloud"
+        else:
+            source = "default"
+
+        return {
+            "name": command,
+            "visibility": spec.visibility if spec else VISIBILITY_EXTENSION,
+            "enabled": cls.is_enabled(command),
+            "default_enabled": spec.default_enabled if spec else True,
+            "description": spec.description if spec else "",
+            "source": source,
+        }
+
+    @classmethod
+    def describe_commands(cls) -> List[dict]:
+        """全部指令的元数据快照（含已禁用的，便于平台侧渲染开关）。"""
+        return [cls.describe(name) for name in cls._registry]
 
     @classmethod
     def execute(cls, command: str, params: Optional[dict] = None,
@@ -53,8 +293,9 @@ class CommandHandler:
         """
         执行指定命令并返回结果字典。
 
-        权限门控放在这里（而非只放在 MQTT 回调里），使 MQTT 下发与 HTTP
-        轮询两条通道同时受控：
+        门控放在这里（而非只放在 MQTT 回调里），使 MQTT 下发、HTTP 轮询、
+        面板本地调试三条入口同时受控：
+          * 未启用（预设为关 / 被平台策略或环境变量关掉）的命令一律拒绝
           * 收到 `revoke_control` 后仅 `REVOKED_ALLOWED_COMMANDS` 仍可执行
           * 已同步过且云端未开放控制能力时，云端指令一律拒绝
             （`local=True` 的面板本地调试不受此条限制）
@@ -62,6 +303,10 @@ class CommandHandler:
         Returns:
             {"success": True, "result": ...} 或 {"success": False, "error": ...}
         """
+        if not cls.is_enabled(command):
+            logger.warning("命令未启用，拒绝执行: %s", command)
+            return {"success": False, "error": DISABLED_MESSAGE.format(name=command)}
+
         state = get_cloud_state()
         if state.is_revoked() and command not in REVOKED_ALLOWED_COMMANDS:
             logger.warning("控制权限已撤销，拒绝执行指令: %s", command)
@@ -82,11 +327,6 @@ class CommandHandler:
             logger.error(f"命令执行异常 [{command}]: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
-    @classmethod
-    def list_commands(cls) -> list:
-        """列出所有已注册的命令名。"""
-        return list(cls._registry.keys())
-
 
 # 记录启动时间（用于 uptime 计算）
 _start_time = time.time()
@@ -96,7 +336,8 @@ _start_time = time.time()
 # 内置命令
 # ============================================================
 
-@CommandHandler.register("ping")
+@CommandHandler.register("ping", visibility=VISIBILITY_PUBLIC, enabled=True,
+                         description="心跳探活 —— 公有指令，任何平台都可依赖")
 def cmd_ping(params: dict) -> dict:
     """心跳检测 — 立即响应。"""
     return {
@@ -106,7 +347,8 @@ def cmd_ping(params: dict) -> dict:
     }
 
 
-@CommandHandler.register("get_info")
+@CommandHandler.register("get_info", visibility=VISIBILITY_PUBLIC, enabled=True,
+                         description="设备基本信息 —— 公有指令")
 def cmd_get_info(params: dict) -> dict:
     """获取设备基本信息。"""
     # 获取本机 IP
@@ -128,7 +370,8 @@ def cmd_get_info(params: dict) -> dict:
     }
 
 
-@CommandHandler.register("reboot")
+@CommandHandler.register("reboot", visibility=VISIBILITY_PUBLIC, enabled=True,
+                         description="重启设备 —— 公有指令（客户端侧仅记录日志）")
 def cmd_reboot(params: dict) -> dict:
     """模拟重启设备（客户端侧仅记录日志）。"""
     delay = params.get("delay", 5)
@@ -136,7 +379,8 @@ def cmd_reboot(params: dict) -> dict:
     return {"message": f"设备已接收重启指令，{delay}秒后重启", "delay": delay}
 
 
-@CommandHandler.register("set_config")
+@CommandHandler.register("set_config", visibility=VISIBILITY_EXTENSION, enabled=True,
+                         description="设置/更新设备配置 —— 拓展指令（占位实现，语义未定型）")
 def cmd_set_config(params: dict) -> dict:
     """设置/更新设备配置（占位实现）。"""
     key = params.get("key")
@@ -148,7 +392,8 @@ def cmd_set_config(params: dict) -> dict:
     return {"message": "配置更新成功", "key": key, "value": value}
 
 
-@CommandHandler.register("get_metrics")
+@CommandHandler.register("get_metrics", visibility=VISIBILITY_PUBLIC, enabled=True,
+                         description="设备运行指标 —— 公有指令")
 def cmd_get_metrics(params: dict) -> dict:
     """获取设备运行指标（模拟数据，可接入真实传感器）。"""
     import random
@@ -161,13 +406,24 @@ def cmd_get_metrics(params: dict) -> dict:
     }
 
 
-@CommandHandler.register("list_commands")
+@CommandHandler.register("list_commands", visibility=VISIBILITY_PUBLIC, enabled=True,
+                         description="能力发现 —— 公有指令，返回启用清单与各指令元数据")
 def cmd_list_commands(params: dict) -> dict:
-    """列出设备支持的所有可用命令（供云端动态发现）。"""
-    return {"commands": CommandHandler.list_commands()}
+    """列出设备支持的所有可用命令（供云端动态发现）。
+
+    返回体：
+        commands —— 当前**启用**的命令名（向后兼容，云端仍按此字段发现能力）
+        specs    —— 全部指令的元数据（含已禁用的），供平台侧渲染开关：
+                    {name, visibility, enabled, default_enabled, description, source}
+    """
+    return {
+        "commands": CommandHandler.list_commands(),
+        "specs": CommandHandler.describe_commands(),
+    }
 
 
-@CommandHandler.register("cloud_probe")
+@CommandHandler.register("cloud_probe", visibility=VISIBILITY_EXTENSION, enabled=True,
+                         description="云端探测 —— 拓展指令，验证 command discovery 链路")
 def cmd_cloud_probe(params: dict) -> dict:
     """云端探测指令 — 验证云端能否通过 list_commands 发现并下发此命令。"""
     return {
@@ -507,7 +763,9 @@ class ShellSessionManager:
                 cls._sessions.pop(sid, None)
 
 
-@CommandHandler.register("execute_shell")
+@CommandHandler.register("execute_shell", visibility=VISIBILITY_EXTENSION, enabled=True,
+                         description="远程执行 Shell —— 高危拓展指令，"
+                                     "另受 GREEN_TRACKER_ENABLE_SHELL 总开关约束")
 def cmd_execute_shell(params: dict) -> dict:
     """
     在**常驻终端**中执行一条命令行 —— 命令序列共享同一个 shell。
@@ -600,7 +858,8 @@ def _run_in_context(command: str, timeout: float, max_output: int,
     return term.run(command, timeout=timeout, max_output=max_output)
 
 
-@CommandHandler.register("terminal_reset")
+@CommandHandler.register("terminal_reset", visibility=VISIBILITY_EXTENSION, enabled=True,
+                         description="重启远程终端 —— 拓展指令，随 execute_shell 一起开关")
 def cmd_terminal_reset(params: dict) -> dict:
     """
     重启终端 —— 丢弃全部累积状态（工作目录、环境变量、函数、别名）。
@@ -620,7 +879,8 @@ def cmd_terminal_reset(params: dict) -> dict:
     return {"restarted": True, "backend": "pty", "message": "终端已重启，状态已清空"}
 
 
-@CommandHandler.register("terminal_interrupt")
+@CommandHandler.register("terminal_interrupt", visibility=VISIBILITY_EXTENSION, enabled=True,
+                         description="向终端前台发 Ctrl+C —— 拓展指令")
 def cmd_terminal_interrupt(params: dict) -> dict:
     """
     向终端前台进程发送 Ctrl+C —— 中断当前正在运行的命令。
@@ -638,28 +898,8 @@ def cmd_terminal_interrupt(params: dict) -> dict:
     }
 
 
-@CommandHandler.register("terminal_resize")
-def cmd_terminal_resize(params: dict) -> dict:
-    """
-    调整终端窗口尺寸（影响依赖 COLUMNS/LINES 的程序，如 `ls` 分栏）。
-
-    params:
-        rows (int, 可选): 行数，默认 24
-        cols (int, 可选): 列数，默认 200
-    """
-    try:
-        rows = int(params.get("rows", 24))
-        cols = int(params.get("cols", 200))
-    except (TypeError, ValueError):
-        raise ValueError("rows / cols 必须是整数")
-    if rows <= 0 or cols <= 0:
-        raise ValueError("rows / cols 必须为正数")
-
-    terminal.get_terminal().resize(rows, cols)
-    return {"rows": rows, "cols": cols}
-
-
-@CommandHandler.register("terminal_info")
+@CommandHandler.register("terminal_info", visibility=VISIBILITY_EXTENSION, enabled=True,
+                         description="查询远程终端状态 —— 拓展指令")
 def cmd_terminal_info(params: dict) -> dict:
     """查看终端状态：shell 路径、进程号、窗口尺寸、当前目录、是否存活。"""
     if not terminal.supported():
@@ -671,7 +911,8 @@ def cmd_terminal_info(params: dict) -> dict:
 # 权限撤销（系统指令）
 # ============================================================
 
-@CommandHandler.register("revoke_control")
+@CommandHandler.register("revoke_control", visibility=VISIBILITY_PUBLIC, enabled=True,
+                         description="系统指令 —— 公有指令，云端撤销控制权限（不可禁用）")
 def cmd_revoke_control(params: dict) -> dict:
     """
     系统指令：云端在密钥被删除 / 禁用 / 去掉控制权限时下发。
