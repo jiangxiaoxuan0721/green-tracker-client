@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (QFrame, QWidget, QVBoxLayout, QHBoxLayout, QPushBut
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
 from api import get_active_sessions
+from api.cloud_state import get_cloud_state
 from device.runtime import init_data_sensor
 from device import get_task_manager
 
@@ -168,6 +169,15 @@ class HomePage(QWidget):
         self.main_window.monitor_page.add_task(session_id, session_name, base_dir)
 
     def fetch_tasks(self):
+        # 拉取任务是设备作业通道的默认能力，不设权限开关 —— 任意有效密钥都能拉，
+        # 云端不再校验 data_read。仅在收到 revoke_control 时才停手。
+        state = get_cloud_state()
+        if state.is_revoked():
+            self.task_list.clear()
+            self.task_list.addItem(
+                state.revoke_reason or "控制权限已被云端撤销")
+            return
+
         self.btn_fetch.setEnabled(False)
         self.task_list.clear()
         self.task_list.addItem("正在获取任务...")

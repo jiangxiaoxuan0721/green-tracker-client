@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor
 
+from api.cloud_state import get_cloud_state
 from mqtt.manager import MQTTService
 
 
@@ -129,6 +130,37 @@ class StatusBadge(QLabel):
             self._set_connected()
         else:
             self._set_disconnected()
+
+
+class CloudBadge(QLabel):
+    """云端受控状态徽章（与连接状态徽章同款）。
+
+    状态只来自云端签到的 `capabilities`，设备不自行判断权限：
+      * 同步中      —— 尚未完成首次签到
+      * 未授权      —— 已签到，云端未开放控制能力
+      * 已受控      —— 云端已开放控制能力
+      * 已撤销      —— 收到 `revoke_control`，等待重新签到
+    """
+
+    _STATES = {
+        "syncing": ("◌ 同步中", C["warning"], C["text"]),
+        "unauthorized": ("✕ 未授权", C["muted"], C["text"]),
+        "controlled": ("● 已受控", C["success"], "white"),
+        "revoked": ("! 已撤销", C["danger"], "white"),
+    }
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedSize(96, 26)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.set_state("syncing")
+
+    def set_state(self, name: str, tooltip: str = ""):
+        text, bg, fg = self._STATES.get(name, self._STATES["syncing"])
+        self.setText(text)
+        self.setStyleSheet(
+            f"background-color: {bg}; color: {fg}; font-weight: 600;")
+        self.setToolTip(tooltip or text)
 
 
 # ============================================================
@@ -254,6 +286,11 @@ class MqttPanel(QWidget):
         self.setObjectName("MqttPanel")
         self.service = MQTTService.get_instance()
 
+        # 云端能力状态：签到线程在后台写入，UI 只在定时器里读取
+        self._cloud_state = get_cloud_state()
+        self._cloud_events: list = []
+        self._cloud_state.add_listener(self._on_cloud_state_changed)
+
         self._init_ui()
         self._connect_signals()
 
@@ -294,7 +331,10 @@ class MqttPanel(QWidget):
 
         toolbar.addStretch()
 
-        # 状态徽章（右侧）
+        # 云端受控徽章 + 连接状态徽章（右侧）
+        self.cloud_badge = CloudBadge()
+        toolbar.addWidget(self.cloud_badge)
+
         self.status_badge = StatusBadge()
         toolbar.addWidget(self.status_badge)
 
@@ -765,6 +805,48 @@ class MqttPanel(QWidget):
             hours, mins = divmod(mins, 60)
             self._set_info("uptime", f"{hours}h{mins:02d}m{secs:02d}s")
 
+    def _on_cloud_state_changed(self, state):
+        """能力变更回调（来自签到线程）——只入队，由 UI 定时器消费。"""
+        self._cloud_events.append(state.snapshot())
+
+    def _update_cloud_badge(self):
+        """按云端能力刷新受控徽章，并落一条变更日志。"""
+        snap = self._cloud_state.snapshot()
+        caps = snap["capabilities"]
+
+        if snap["revoked"]:
+            name = "revoked"
+            tip = f"控制权限已被撤销：{snap['revoke_reason']}（等待重新签到）"
+        elif snap["last_heartbeat_at"] is None:
+            name = "syncing"
+            tip = "尚未完成云端签到"
+        elif caps["receive_commands"]:
+            name = "controlled"
+            tip = (f"云端已开放控制能力（通道: {snap['command_channel']}）\n"
+                   f"上传数据: {caps['upload_data']}")
+        else:
+            name = "unauthorized"
+            tip = "云端未向本设备开放控制能力，等下次签到结果变化"
+
+        self.cloud_badge.set_state(name, tip)
+
+        while self._cloud_events:
+            self._append_cloud_event(self._cloud_events.pop(0))
+
+    def _append_cloud_event(self, snap: dict):
+        caps = snap["capabilities"]
+        if snap["revoked"]:
+            self.log_viewer.append_log(
+                "ERROR",
+                f"控制权限已撤销：{snap['revoke_reason']}，正在重新签到")
+            return
+
+        self.log_viewer.append_log(
+            "SYSTEM",
+            f"云端能力更新: 受控={caps['receive_commands']} "
+            f"上传={caps['upload_data']} "
+            f"通道={snap['command_channel'] or '无'}")
+
     def _sync_initial_state(self):
         """面板创建时同步 MQTT 当前状态（补偿信号时序问题）。"""
         svc = self.service
@@ -782,7 +864,8 @@ class MqttPanel(QWidget):
         else:
             self.log_viewer.append_log("SYSTEM", "面板已加载，MQTT 未启动")
 
-        # 刷新设备信息
+        # 刷新云端受控徽章与设备信息
+        self._update_cloud_badge()
         self._refresh_info()
 
     def _poll_connection_status(self):
@@ -792,6 +875,7 @@ class MqttPanel(QWidget):
         但信号可能因时序问题未被 UI 正确接收。
         """
         svc = self.service
+        self._update_cloud_badge()
         current_ui_connected = self.status_badge.text().startswith("● 已连接")
         actual_connected = svc.is_connected
 

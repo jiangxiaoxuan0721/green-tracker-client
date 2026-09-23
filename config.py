@@ -51,6 +51,16 @@ def api_timeout() -> float:
     return float(os.getenv("API_TIMEOUT", "10"))
 
 
+def device_id() -> str:
+    """设备 ID —— 云端 HTTP 头 `X-Device-Id` 使用（与 MQTT_DEVICE_ID 同源）。"""
+    return os.getenv("MQTT_DEVICE_ID", "")
+
+
+def heartbeat_interval() -> float:
+    """云端签到间隔（秒），文档建议 5~10 分钟，默认 300。"""
+    return float(os.getenv("DEVICE_HEARTBEAT_INTERVAL", "300"))
+
+
 # ============================================================
 # 采集
 # ============================================================

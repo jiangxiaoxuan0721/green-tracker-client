@@ -17,10 +17,18 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from api import heartbeat as _heartbeat
+from api.cloud_state import get_cloud_state
 from . import terminal
 
 
 logger = logging.getLogger("mqtt-commands")
+
+
+# 收到 `revoke_control` 后仍可执行的命令 —— 只保留连接维持相关能力
+REVOKED_ALLOWED_COMMANDS = {"ping", "revoke_control"}
+REVOKE_BLOCKED_MESSAGE = "控制权限已被云端撤销，仅保留连接相关命令"
+NO_CONTROL_MESSAGE = "云端未向本设备开放控制能力（等下次签到结果变化）"
 
 
 class CommandHandler:
@@ -40,13 +48,29 @@ class CommandHandler:
         return decorator
 
     @classmethod
-    def execute(cls, command: str, params: Optional[dict] = None) -> dict:
+    def execute(cls, command: str, params: Optional[dict] = None,
+                local: bool = False) -> dict:
         """
         执行指定命令并返回结果字典。
+
+        权限门控放在这里（而非只放在 MQTT 回调里），使 MQTT 下发与 HTTP
+        轮询两条通道同时受控：
+          * 收到 `revoke_control` 后仅 `REVOKED_ALLOWED_COMMANDS` 仍可执行
+          * 已同步过且云端未开放控制能力时，云端指令一律拒绝
+            （`local=True` 的面板本地调试不受此条限制）
 
         Returns:
             {"success": True, "result": ...} 或 {"success": False, "error": ...}
         """
+        state = get_cloud_state()
+        if state.is_revoked() and command not in REVOKED_ALLOWED_COMMANDS:
+            logger.warning("控制权限已撤销，拒绝执行指令: %s", command)
+            return {"success": False, "error": REVOKE_BLOCKED_MESSAGE}
+
+        if not local and state.synced and not state.can_receive_commands():
+            logger.warning("云端未开放控制能力，拒绝执行指令: %s", command)
+            return {"success": False, "error": NO_CONTROL_MESSAGE}
+
         handler = cls._registry.get(command)
         if handler is None:
             return {"success": False, "error": f"未知命令: {command}"}
@@ -641,6 +665,36 @@ def cmd_terminal_info(params: dict) -> dict:
     if not terminal.supported():
         return {"tty": False, "backend": "subprocess", "alive": False}
     return terminal.get_terminal().info()
+
+
+# ============================================================
+# 权限撤销（系统指令）
+# ============================================================
+
+@CommandHandler.register("revoke_control")
+def cmd_revoke_control(params: dict) -> dict:
+    """
+    系统指令：云端在密钥被删除 / 禁用 / 去掉控制权限时下发。
+
+    设备必须：
+      1. 立即置「不可受控」，拒绝后续控制指令（仅保留 `ping` 等连接命令）
+      2. 立即重新调用 heartbeat，按新的 capabilities 恢复或继续保持关闭
+    """
+    reason = params.get("reason") or "云端已撤销本设备的控制权限"
+    state = get_cloud_state()
+    state.mark_revoked(reason)
+
+    service = _heartbeat.get_heartbeat_service()
+    if service is not None and service.is_running:
+        service.trigger_immediate()
+    else:
+        logger.warning("签到服务未运行，无法立即重新签到（下次周期签到时恢复）")
+
+    return {
+        "message": "已停止接受控制指令，正在重新签到",
+        "reason": reason,
+        "revoked": True,
+    }
 
 
 # ============================================================

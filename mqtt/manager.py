@@ -14,6 +14,7 @@ MQTT 服务管理器。
 
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -254,6 +255,9 @@ class MQTTService:
         self._running = True
         self._worker.start()
 
+        # 设备上线即开始签到（关机/停止时结束），云端据此下发能力开关
+        self._start_heartbeat()
+
         logger.info("MQTT 服务已启动（后台线程）")
         if self._signals is not None:
             try:
@@ -274,6 +278,8 @@ class MQTTService:
             self._worker.stop()
             self._worker = None
 
+        self._stop_heartbeat()
+
         self._client = None
         if self._signals is not None:
             try:
@@ -288,12 +294,46 @@ class MQTTService:
         return self.start()
 
     # -----------------------------------------------------------------
+    # 云端签到（能力开关来源）
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def _heartbeat_enabled() -> bool:
+        """可通过 GREEN_TRACKER_HEARTBEAT=0 关闭（调试/离线场景）。"""
+        return os.getenv("GREEN_TRACKER_HEARTBEAT", "1").lower() not in (
+            "0", "false", "no", "off")
+
+    def _start_heartbeat(self) -> None:
+        try:
+            from api.heartbeat import start_heartbeat
+
+            if not self._heartbeat_enabled():
+                logger.info("云端签到已通过环境变量关闭")
+                return
+            start_heartbeat()
+        except Exception as e:
+            # 签到失败不影响 MQTT 通道本身
+            logger.warning(f"云端签到服务启动失败: {e}")
+
+    def _stop_heartbeat(self) -> None:
+        try:
+            from api.heartbeat import stop_heartbeat
+
+            stop_heartbeat()
+        except Exception as e:
+            logger.warning(f"云端签到服务停止异常: {e}")
+
+    # -----------------------------------------------------------------
     # 命令 API
     # -----------------------------------------------------------------
 
     def send_command_to_self(self, command: str, params: Optional[dict] = None) -> dict:
-        """向自身发送一条本地命令（不经过 Broker），用于调试。"""
-        result = CommandHandler.execute(command, params)
+        """向自身发送一条本地命令（不经过 Broker），用于调试。
+
+        `local=True` 表示本地面板发起，不受「云端未开放控制能力」限制；
+        但 `revoke_control` 之后的撤销门控仍然生效。
+        """
+        result = CommandHandler.execute(command, params, local=True)
         if self._signals is not None:
             try:
                 self._signals.command_received.emit({

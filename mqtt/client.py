@@ -93,6 +93,9 @@ def _load_env():
 _load_env()
 
 # 配置常量
+# 本机自造的 command_id 前缀 —— 云端指令队列里没有记录，回执必然 404
+LOCAL_COMMAND_ID_PREFIXES = ("local_", "manual_")
+
 DEVICE_ID: str = os.getenv("MQTT_DEVICE_ID", "")
 DEVICE_SECRET: str = os.getenv("MQTT_DEVICE_SECRET", "")
 BROKER_HOST: str = os.getenv("MQTT_BROKER_HOST", "green-tracker.cn")
@@ -331,11 +334,40 @@ class DeviceMQTTClient:
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-        # 发送响应
+        # 发送响应（MQTT 通道保留，云端仍可监听）
         resp_topic = _response_topic(self.device_id)
         self._client.publish(resp_topic, json.dumps(response), qos=1)
         icon = "+" if result.get("success") else "-"
         logger.info(f"{icon} 命令响应已发送: {command} -> success={result.get('success')}")
+
+        # 云端主回执走 HTTP：每条指令都要回，否则会被判定超时
+        self._report_result_http(command_id, result)
+
+    def _report_result_http(self, command_id: str, result: dict) -> None:
+        """通过 HTTP `POST /{command_id}/result` 回执（本地自造指令跳过）。
+
+        下列前缀的 command_id 都由本机生成，云端指令队列里查无此记录，
+        回执必然 404 —— 属于预期行为，不应产生噪音：
+          * `local_`  —— MQTT 面板本地执行
+          * `manual_` —— MQTTT 面板「远程发布」自己 publish 的模拟指令
+        """
+        if not command_id or str(command_id).startswith(LOCAL_COMMAND_ID_PREFIXES):
+            logger.debug(f"本地自造指令，跳过 HTTP 回执: {command_id}")
+            return
+
+        ok = result.get("success", False)
+        try:
+            from api import device_commands
+
+            device_commands.report_result(
+                command_id,
+                device_commands.STATUS_ACKED if ok else device_commands.STATUS_FAILED,
+                result.get("result"),
+                None if ok else result.get("error"),
+            )
+        except Exception as e:
+            # 回执失败不影响命令本身与 MQTT 响应
+            logger.warning(f"HTTP 回执失败 [{command_id}]: {e}")
 
     # -----------------------------------------------------------------
     # 状态上报

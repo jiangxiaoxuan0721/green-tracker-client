@@ -2,6 +2,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLa
                              QComboBox, QLineEdit, QFileDialog, QTextEdit, QMessageBox)
 from PyQt6.QtCore import QThread, pyqtSignal
 from api import upload_numeric_data, upload_file_data
+from api.cloud_state import get_cloud_state
 
 
 class UploadDataThread(QThread):
@@ -247,6 +248,14 @@ class UploadPage(QWidget):
             self.label_file_path.setText(file_path.split("/")[-1]) # type: ignore
 
     def upload_data(self):
+        # 权限由云端开关：未开放数据上传（或控制已被撤销）时静默降级
+        state = get_cloud_state()
+        if not state.can_upload():
+            reason = state.revoke_reason or "云端未向本设备开放数据上传能力"
+            self.log_text.append(f"[拒绝] {reason}")
+            QMessageBox.warning(self, "无法上传", reason)
+            return
+
         session_id = self.task.get("id", "")
         description = self.edit_desc.text() or None
 

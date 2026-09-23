@@ -12,6 +12,8 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QBrush, QColor
 
+from api.cloud_state import get_cloud_state
+
 
 # 设计系统
 COLORS = {
@@ -474,6 +476,14 @@ class BatchUploadPage(QWidget):
     def start_upload(self):
         if not os.path.exists(self.data_dir):
             QMessageBox.warning(self, "警告", "数据目录不存在")
+            return
+
+        # 权限由云端开关：未开放数据上传（或控制已被撤销）时静默降级
+        state = get_cloud_state()
+        if not state.can_upload():
+            QMessageBox.warning(
+                self, "无法上传",
+                state.revoke_reason or "云端未向本设备开放数据上传能力")
             return
 
         self.btn_scan.setEnabled(False)

@@ -29,6 +29,9 @@ green-tracker-client/
 │   └── terminal_commands.md # 远程终端命令对接说明（云端 / Agent 参考）
 ├── api/                     # API 通信模块
 │   ├── client.py            # 公共传输层（headers / post_json / post_file）
+│   ├── device_commands.py   # 云端指令通道（签到 / 取指令 / 回执 + 错误分类）
+│   ├── cloud_state.py       # 云端能力状态（capabilities 唯一事实源）
+│   ├── heartbeat.py         # 签到编排（周期签到 / 退避 / HTTP 指令轮询）
 │   ├── get_active_sessions.py   # 获取活跃任务
 │   ├── upload_numeric_data.py  # 上传数字数据
 │   └── upload_file_data.py     # 上传文件数据
@@ -86,6 +89,8 @@ MQTT_DEVICE_ID=your-device-id            # 设备唯一 ID
 MQTT_DEVICE_SECRET=your-device-secret    # 设备密钥
 MQTT_BROKER_HOST=green-tracker.cn        # MQTT Broker 地址
 MQTT_BROKER_PORT=1883                    # MQTT Broker 端口
+DEVICE_HEARTBEAT_INTERVAL=300            # 云端签到间隔（秒，可选）
+GREEN_TRACKER_HEARTBEAT=1                # 设为 0 可关闭云端签到（调试用）
 ```
 
 ### 3. 运行应用
@@ -169,6 +174,7 @@ on_connect 回调:
 | `terminal_interrupt` | 向终端前台发送 Ctrl+C | 无 | `{interrupted, message}` |
 | `terminal_resize` | 调整终端窗口尺寸 | `rows?`(默认 24), `cols?`(默认 200) | `{rows, cols}` |
 | `terminal_info` | 查询终端状态 | 无 | `{shell, pid, alive, tty, backend, rows, cols, cwd, uptime_seconds}` |
+| `revoke_control` | **系统指令**：云端撤销控制权限 | `reason?` | `{message, reason, revoked}` —— 设备立即停止受控并重新签到 |
 
 云端 / Agent 的完整对接说明（报文格式、参数与返回字段、超时与中断语义、最佳实践）
 见 **[`doc/terminal_commands.md`](doc/terminal_commands.md)**。
@@ -237,6 +243,60 @@ on_connect 回调:
 - **审计日志**：每次执行前后均记录执行用户、命令行、退出码与耗时。
 
 如需彻底关闭该能力，在 `.env` 中设置 `GREEN_TRACKER_ENABLE_SHELL=false`，此后调用将直接返回错误。
+
+### 云端接入：签到 / 能力开关 / 回执
+
+设备只做三件事 —— **签到、取指令、回执**。权限由云端管理员在密钥上开关，
+客户端**不解析权限含义**，只认签到回传的 `capabilities`。
+
+```mermaid
+sequenceDiagram
+    participant D as 客户端
+    participant C as 云端 /api/device-commands
+    participant M as MQTT Broker
+
+    D->>C: POST /heartbeat（X-API-Key + X-Device-Id）
+    C-->>D: {registered, capabilities, command_channel, poll_interval_seconds}
+    alt command_channel = mqtt
+        M->>D: green-tracker/device/{id}/command
+        D->>C: POST /{command_id}/result（acked / failed）
+    else command_channel = http
+        D->>C: GET /pending?device_id=…
+        D->>C: POST /{command_id}/result
+    else null
+        Note over D: 不拉指令，只保持签到
+    end
+    C->>M: revoke_control（密钥失效时）
+    D->>C: 立即重新 heartbeat
+```
+
+| 环节 | 实现 |
+|------|------|
+| 凭证 | 所有请求带 `X-API-Key`（`SECRET_KEY`）与 `X-Device-Id`（`MQTT_DEVICE_ID`） |
+| 签到 | MQTT 服务启动时立即签到一次，之后每 **300s**（`DEVICE_HEARTBEAT_INTERVAL`）一次 |
+| 能力开关 | `api/cloud_state.py` 保存 `upload_data` / `receive_commands` 与 `command_channel`；上传、执行指令两处统一查询它（**任务拉取不是权限项**，不查云状态，见下） |
+| 取指令 | `mqtt` → 订阅 `green-tracker/device/{id}/command`；`http` → 按 `poll_interval_seconds`（默认 5s）轮询 `/pending` |
+| 回执 | 每条指令都 `POST /{command_id}/result`（`acked` / `failed` + `error_message`）；MQTT `.../response` 仍保留 |
+| 撤销 | 收到 `revoke_control` 立即置不可受控，仅保留 `ping` 与 `revoke_control`，并立刻重新签到，云端恢复后自动解除 |
+| 退避 | 401 → 固定 300s；403 → 静默降级、保持原间隔；5xx / 网络错误 → 1→2→4…→60s 指数退避 |
+
+MQTT 控制台右上角新增**云端受控指示灯**（与"已连接"同款）：
+
+| 指示灯 | 含义 |
+|--------|------|
+| `◌ 同步中` | 尚未完成首次签到 |
+| `✕ 未授权` | 已签到，云端未开放控制能力 |
+| `● 已受控` | 云端已开放控制能力 |
+| `! 已撤销` | 收到 `revoke_control`，等待重新签到 |
+
+> 未同步过（云端不可达）时，上传沿用本地旧行为（fail-open），
+> 避免云端抖动打断采集；一旦签到成功就以云端结论为准。
+>
+> **任务拉取不受权限约束**：`POST /api/collection-sessions/active_sessions`
+> 是设备作业通道的默认能力，任意一把有效密钥都能拉（云端不再校验 `data_read`，
+> 不会返回 403）。`data_read` 只约束「读取 / 导出已上传数据」那类接口 ——
+> 领活不设限，取回自己交上去的东西才要授权。
+> 调试时可用 `.env` 中 `GREEN_TRACKER_HEARTBEAT=0` 关闭签到。
 
 ### 任务管理
 

@@ -136,6 +136,52 @@ class TestStop:
         assert service.is_running is False
 
 
+class TestHeartbeatWiring:
+    """MQTT 启停应连带启停云端签到（能力开关的来源）。"""
+
+    def _start(self, service, monkeypatch):
+        monkeypatch.setattr(manager, "create_mqtt_client", lambda **kw: object())
+        monkeypatch.setattr(manager, "_MQTTWorker", FakeWorker)
+        service.start(device_id="d", device_secret="s")
+
+    def test_start_begins_heartbeat_when_enabled(self, service, monkeypatch, qapp):
+        monkeypatch.setenv("GREEN_TRACKER_HEARTBEAT", "1")
+        calls = []
+        import api.heartbeat as hb_mod
+
+        monkeypatch.setattr(hb_mod, "start_heartbeat",
+                            lambda *a, **k: calls.append("start"))
+
+        self._start(service, monkeypatch)
+
+        assert calls == ["start"]
+
+    def test_heartbeat_disabled_by_env(self, service, monkeypatch, qapp):
+        calls = []
+        import api.heartbeat as hb_mod
+
+        monkeypatch.setattr(hb_mod, "start_heartbeat",
+                            lambda *a, **k: calls.append("start"))
+
+        self._start(service, monkeypatch)
+
+        assert calls == []
+
+    def test_stop_ends_heartbeat(self, service, monkeypatch, qapp):
+        monkeypatch.setenv("GREEN_TRACKER_HEARTBEAT", "1")
+        calls = []
+        import api.heartbeat as hb_mod
+
+        monkeypatch.setattr(hb_mod, "start_heartbeat", lambda *a, **k: None)
+        monkeypatch.setattr(hb_mod, "stop_heartbeat",
+                            lambda *a, **k: calls.append("stop"))
+
+        self._start(service, monkeypatch)
+        service.stop()
+
+        assert calls == ["stop"]
+
+
 class TestRestart:
     def test_restart_stops_then_starts(self, service, monkeypatch, qapp):
         monkeypatch.setattr(manager, "create_mqtt_client", lambda **kw: object())
