@@ -72,6 +72,8 @@ STYLES = {
             padding: 6px 16px;
             border-radius: 4px;
             border: 1px solid {C['border']};
+            background-color: {C['card']};
+            color: {C['text']};
         }}
         QLineEdit, QComboBox {{
             font-size: 13px;
@@ -79,6 +81,27 @@ STYLES = {
             border: 1px solid {C['border']};
             border-radius: 4px;
             background-color: {C['card']};
+            color: {C['text']};
+        }}
+        /* 下拉列表是独立的弹出窗口，不会继承 QComboBox 自身的前景色。
+           Windows 深色主题下 Qt 6.5+ 会给出白色前景，与这里的浅色卡片背景
+           重合导致文字几乎不可见（Linux 桌面默认浅色，故不暴露），
+           因此必须显式指定项的前景色与选中态。 */
+        QComboBox QAbstractItemView {{
+            background-color: {C['card']};
+            color: {C['text']};
+            selection-background-color: {C['accent']};
+            selection-color: #FFFFFF;
+            border: 1px solid {C['border']};
+        }}
+        QComboBox::item {{
+            background-color: {C['card']};
+            color: {C['text']};
+            padding: 4px 8px;
+        }}
+        QComboBox::item:selected {{
+            background-color: {C['accent']};
+            color: #FFFFFF;
         }}
         QTextEdit, QListWidget {{
             font-family: 'JetBrains Mono', 'Consolas', 'Monospace';
@@ -86,6 +109,7 @@ STYLES = {
             border: 1px solid {C['border']};
             border-radius: 4px;
             background-color: {C['card']};
+            color: {C['text']};
         }}
     """,
 }

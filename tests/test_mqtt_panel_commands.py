@@ -5,10 +5,10 @@
 """
 import pytest
 from PyQt6.QtGui import QTextOption
-from PyQt6.QtWidgets import QTextEdit
+from PyQt6.QtWidgets import QTextEdit, QStyleFactory
 
 from mqtt.commands import CommandHandler
-from ui.mqtt_panel import MqttPanel
+from ui.mqtt_panel import MqttPanel, STYLES
 
 
 def _combo_items(panel) -> list:
@@ -116,3 +116,42 @@ class TestCommandListAutoRefresh:
         spec = next(s for s in panel.service.describe_commands()
                     if s["name"] == "cloud_probe")
         assert spec["source"] == "cloud"
+
+
+# ============================================================
+# 前景色必须显式指定（Windows 深色主题下曾出现白字白底）
+# ============================================================
+
+class TestExplicitForeground:
+    def test_combo_and_text_widgets_declare_text_color(self):
+        """下拉框 / 输入框 / 结果区都要写明前景色。
+
+        只写背景不写前景时，Windows 深色主题下系统 palette 给出白色文字，
+        与浅色卡片背景重合，命令列表几乎看不清（Linux 浅色主题不受影响）。
+        """
+        sheet = STYLES["panel"]
+        for selector in ("QLineEdit, QComboBox {",
+                         "QTextEdit, QListWidget {",
+                         "QComboBox QAbstractItemView {"):
+            block = sheet.split(selector, 1)[1].split("}", 1)[0]
+            assert "color:" in block, selector
+            assert "background-color:" in block, selector
+
+    def test_combo_popup_items_have_own_color(self):
+        """下拉列表是独立弹出窗口，不继承 QComboBox 自身的前景色。"""
+        sheet = STYLES["panel"]
+        assert "QComboBox QAbstractItemView" in sheet
+        assert "selection-color:" in sheet
+
+
+class TestLightTheme:
+    def test_palette_pins_dark_text(self, qapp):
+        """应用启动时钉住浅色调色板，避免系统深色主题改写前景色。"""
+        import main
+
+        main._apply_light_theme(qapp)
+
+        text = qapp.palette().color(main.QPalette.ColorRole.Text)
+        assert text.name().lower() == "#2d2d2d"
+        if "Fusion" in QStyleFactory.keys():
+            assert qapp.style().objectName().lower() == "fusion"
