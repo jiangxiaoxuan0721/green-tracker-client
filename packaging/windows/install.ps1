@@ -30,22 +30,25 @@ if (-not (Test-Path (Join-Path $SourceDir 'main.py'))) {
 function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Green }
 
 # ---------------------------------------------------------------- Python
-$python = $null
+$pythonExe = $null
+$pythonArgs = @()
 foreach ($candidate in @('py', 'python', 'python3')) {
     $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
     if (-not $cmd) { continue }
-    $args = @()
-    if ($candidate -eq 'py') { $args = @('-3') }
+    $prefix = @()
+    if ($candidate -eq 'py') { $prefix = @('-3') }
     try {
-        $ver = & $cmd @args -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
+        $probeArgs = @($prefix) + @('-c', "import sys; print('%d.%d' % sys.version_info[:2])")
+        $ver = & $cmd.Source @probeArgs 2>$null
     } catch { continue }
     if ($ver -and ([version]$ver -ge [version]'3.10')) {
-        $python = @($cmd.Source) + $args
+        $pythonExe = $cmd.Source
+        $pythonArgs = @($prefix)
         break
     }
 }
-if (-not $python) { throw "Python 3.10+ not found - install it first (https://www.python.org/downloads/)" }
-Write-Step "Using Python: $($python -join ' ')"
+if (-not $pythonExe) { throw "Python 3.10+ not found - install it first (https://www.python.org/downloads/)" }
+Write-Step ("Using Python: " + (@($pythonExe) + $pythonArgs -join ' '))
 
 # ---------------------------------------------------------------- app files
 Write-Step "Installing app to: $InstallDir"
@@ -59,7 +62,8 @@ Get-ChildItem -Path $SourceDir -Force | Where-Object { $exclude -notcontains $_.
 
 # ---------------------------------------------------------------- virtualenv
 Write-Step "Creating virtual environment and installing dependencies"
-& $python[0] @($python[1..($python.Length - 1)]) -m venv (Join-Path $InstallDir '.venv')
+$venvArgs = @($pythonArgs) + @('-m', 'venv', (Join-Path $InstallDir '.venv'))
+& $pythonExe @venvArgs
 $venvPython = Join-Path $InstallDir '.venv\Scripts\python.exe'
 & $venvPython -m pip install --upgrade pip -q
 & $venvPython -m pip install -r (Join-Path $InstallDir 'requirements.txt') -q
@@ -85,8 +89,8 @@ Write-Step "Launcher: $launcher"
 # ---------------------------------------------------------------- config
 if (-not $NoConfig) {
     Write-Step "Writing config template: $ConfigDir"
-    & $python[0] @($python[1..($python.Length - 1)]) `
-        (Join-Path $InstallDir 'packaging\common\prepare_config.py') $ConfigDir
+    $cfgArgs = @($pythonArgs) + @((Join-Path $InstallDir 'packaging\common\prepare_config.py'), $ConfigDir)
+    & $pythonExe @cfgArgs
 }
 
 # ---------------------------------------------------------------- shortcuts
