@@ -1,10 +1,11 @@
-import requests
-from dotenv import load_dotenv
 import os
 
-load_dotenv()
+import requests
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+# 导入 config 的同时就会加载配置目录里的 .env（见 config.py），
+# 基地址必须在**调用时**解析：模块级常量会在 import 那一刻被冻结，
+# 若那时 .env 还没加载，就会拿到默认的 localhost:8000。
+from config import api_base_url
 
 
 def get_active_sessions(api_key: str | None = None) -> list[dict]:
@@ -20,7 +21,7 @@ def get_active_sessions(api_key: str | None = None) -> list[dict]:
     if api_key is None:
         api_key = os.getenv("SECRET_KEY")
 
-    url = f"{API_BASE_URL}/api/collection-sessions/active_sessions"
+    url = f"{api_base_url()}/api/collection-sessions/active_sessions"
     headers = {"x-api-key": api_key}
 
     response = requests.post(url, headers=headers)

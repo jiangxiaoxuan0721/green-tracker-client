@@ -1,3 +1,7 @@
+# 先导入 config：它在导入期就把配置目录里的 .env 写进 os.environ，
+# 后面的 ui / api / device 模块才能读到正确的 API_BASE_URL、SECRET_KEY 等。
+import config  # noqa: F401
+
 from ui.main_window import MainWindow
 from PyQt6.QtWidgets import QApplication, QStyleFactory
 from PyQt6.QtGui import QFont, QPalette, QColor

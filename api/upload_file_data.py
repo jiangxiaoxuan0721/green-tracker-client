@@ -1,10 +1,10 @@
-import requests
-from dotenv import load_dotenv
 import os
 
-load_dotenv()
+import requests
 
-API_BASE_URL = os.getenv("API_BASE_URL")
+# 导入 config 的同时就会加载配置目录里的 .env（见 config.py）；
+# 基地址必须在调用时解析，模块级常量会在 import 时被冻结。
+from config import api_base_url
 
 
 def upload_file_data(
@@ -38,7 +38,7 @@ def upload_file_data(
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"文件不存在: {file_path}")
 
-    url = f"{API_BASE_URL}/api/raw-data/upload-file"
+    url = f"{api_base_url()}/api/raw-data/upload-file"
     headers = {
         "x-api-key": api_key,
         "accept": "application/json"

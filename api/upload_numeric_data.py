@@ -1,10 +1,10 @@
-import requests
-from dotenv import load_dotenv
 import os
 
-load_dotenv()
+import requests
 
-API_BASE_URL = os.getenv("API_BASE_URL")
+# 导入 config 的同时就会加载配置目录里的 .env（见 config.py）；
+# 基地址必须在调用时解析，模块级常量会在 import 时被冻结。
+from config import api_base_url
 
 # 数据子类型到数据类型的映射
 SUBTYPE_TO_DATATYPE = {
@@ -47,7 +47,7 @@ def upload_numeric_data(
     """
     api_key = os.getenv("SECRET_KEY")
 
-    url = f"{API_BASE_URL}/api/raw-data/upload-data"
+    url = f"{api_base_url()}/api/raw-data/upload-data"
     headers = {
         "x-api-key": api_key,
         "accept": "application/json"

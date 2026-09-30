@@ -25,7 +25,7 @@ class TestGetActiveSessions:
             return DummyResponse(json_data=[{"id": "1", "mission_name": "m"}])
 
         monkeypatch.setattr(gs, "requests", SimpleNamespace(post=fake_post))
-        monkeypatch.setattr(gs, "API_BASE_URL", "http://server:9000")
+        monkeypatch.setenv("API_BASE_URL", "http://server:9000")
         monkeypatch.setenv("SECRET_KEY", "env-secret")
 
         result = gs.get_active_sessions()
@@ -42,7 +42,7 @@ class TestGetActiveSessions:
             return DummyResponse(json_data=[])
 
         monkeypatch.setattr(gs, "requests", SimpleNamespace(post=fake_post))
-        monkeypatch.setattr(gs, "API_BASE_URL", "http://server")
+        monkeypatch.setenv("API_BASE_URL", "http://server")
         monkeypatch.setenv("SECRET_KEY", "env-secret")
 
         gs.get_active_sessions(api_key="explicit")
@@ -54,7 +54,7 @@ class TestGetActiveSessions:
             gs, "requests",
             SimpleNamespace(post=lambda *a, **k: DummyResponse(status_code=500)),
         )
-        monkeypatch.setattr(gs, "API_BASE_URL", "http://server")
+        monkeypatch.setenv("API_BASE_URL", "http://server")
         with pytest.raises(RuntimeError, match="HTTP 500"):
             gs.get_active_sessions(api_key="k")
 
@@ -70,7 +70,7 @@ class TestUploadNumericData:
             return DummyResponse(json_data={"ok": True})
 
         monkeypatch.setattr(un, "requests", SimpleNamespace(post=fake_post))
-        monkeypatch.setattr(un, "API_BASE_URL", "http://server")
+        monkeypatch.setenv("API_BASE_URL", "http://server")
         monkeypatch.setenv("SECRET_KEY", "key-123")
 
     def test_payload_and_headers(self, monkeypatch):
@@ -133,7 +133,7 @@ class TestUploadFileData:
             return DummyResponse(json_data={"ok": 1})
 
         monkeypatch.setattr(uf, "requests", SimpleNamespace(post=fake_post))
-        monkeypatch.setattr(uf, "API_BASE_URL", "http://server")
+        monkeypatch.setenv("API_BASE_URL", "http://server")
         monkeypatch.setenv("SECRET_KEY", "key-abc")
 
         result = uf.upload_file_data(
