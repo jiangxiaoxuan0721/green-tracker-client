@@ -1,7 +1,12 @@
-# 卸载 green-tracker-client —— 只删应用与快捷方式，保留配置与采集数据
+# Uninstall green-tracker-client (Windows)
+# Removes the app and shortcuts only; config and collected data are kept.
+#
+# NOTE: this file is intentionally kept pure ASCII. Windows PowerShell 5.1
+#       reads BOM-less .ps1 files using the system ANSI codepage, so any
+#       non-ASCII text would be mis-decoded (and may even break parsing).
 #
 #   .\uninstall.ps1
-#   .\uninstall.ps1 -Purge       连配置目录一起删除
+#   .\uninstall.ps1 -Purge        also delete the config directory
 param(
     [string]$InstallDir = "$env:LOCALAPPDATA\GreenTrackerClient",
     [string]$ConfigDir  = "$env:APPDATA\GreenTrackerClient",
@@ -13,7 +18,7 @@ $AppName = 'green-tracker-client'
 function Remove-IfExists($path) {
     if (Test-Path $path) {
         Remove-Item -Path $path -Recurse -Force
-        Write-Host "==> 已删除: $path" -ForegroundColor Yellow
+        Write-Host "==> Removed: $path" -ForegroundColor Yellow
     }
 }
 
@@ -28,7 +33,7 @@ foreach ($dir in @($ws.SpecialFolders('Desktop'))) {
 if ($Purge) {
     Remove-IfExists $ConfigDir
 } else {
-    Write-Host "==> 已保留配置: $ConfigDir（如需清除请加 -Purge）" -ForegroundColor Yellow
+    Write-Host "==> Config kept: $ConfigDir (use -Purge to delete it)" -ForegroundColor Yellow
 }
-Write-Host "==> 已保留采集数据: $env:USERPROFILE\green_tracker_data" -ForegroundColor Yellow
-Write-Host "卸载完成。" -ForegroundColor Green
+Write-Host "==> Collected data kept: $env:USERPROFILE\green_tracker_data" -ForegroundColor Yellow
+Write-Host "Uninstall complete." -ForegroundColor Green

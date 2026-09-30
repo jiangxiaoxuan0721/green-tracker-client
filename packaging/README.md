@@ -55,6 +55,23 @@ sudo apt remove green-tracker-client
 
 Windows 对应：`uninstall.ps1` / `uninstall.ps1 -Purge`。
 
+## Windows 注意事项
+
+`install.ps1` / `uninstall.ps1` 保持**纯 ASCII（输出为英文）**：Windows PowerShell 5.1 会把无 BOM
+的 `.ps1` 当作系统 ANSI（中文环境即 GBK）解码，含中文会出现乱码，严重时字节错位导致
+`ParserError` 直接无法运行。PowerShell 7（`pwsh`）无此问题，但为兼容 5.1 一律只用 ASCII。
+
+安装时若提示「未对文件进行数字签名」，是默认执行策略 `Restricted` 拦截，按如下方式运行：
+
+```powershell
+cd <解压目录>\packaging\windows
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass   # 仅当前窗口生效
+.\install.ps1
+```
+
+或在 cmd 中一次性绕过：`powershell -ExecutionPolicy Bypass -File .\install.ps1`。
+也可在解压前右键 zip → 属性 → 勾选「解除锁定」，去掉「来自互联网」标记。
+
 ## 首次使用
 
 1. 编辑配置目录下的 `.env`：填 `API_BASE_URL`、`SECRET_KEY`、`MQTT_DEVICE_*`
