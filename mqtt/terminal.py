@@ -17,7 +17,6 @@
 只能串行执行一条命令 —— 但需求本身只要一个终端。
 """
 import errno
-import fcntl
 import logging
 import os
 import re
@@ -25,10 +24,19 @@ import select
 import shlex
 import signal
 import struct
-import termios
 import threading
 import time
 import uuid
+
+# 以下三个模块只在 POSIX 平台提供。Windows 上导入失败即视为不支持 PTY；
+# 注意必须在导入期就降级，否则 import mqtt.terminal 会直接抛 ModuleNotFoundError，
+# 连带让整个 MQTT 服务无法启动。
+try:
+    import fcntl
+    import termios
+except ImportError:  # pragma: no cover - 平台相关
+    fcntl = None    # type: ignore[assignment]
+    termios = None  # type: ignore[assignment]
 
 try:  # Windows 没有 pty 模块，导入失败即视为不支持
     import pty
@@ -61,7 +69,12 @@ _INTR = b"\x03"               # Ctrl+C
 
 def supported() -> bool:
     """当前平台能否提供 PTY 真终端。"""
-    return pty is not None and hasattr(os, "fork")
+    return (
+        pty is not None
+        and fcntl is not None
+        and termios is not None
+        and hasattr(os, "fork")
+    )
 
 
 def default_shell() -> str:
