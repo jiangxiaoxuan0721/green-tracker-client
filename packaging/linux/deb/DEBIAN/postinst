@@ -1,0 +1,24 @@
+#!/bin/sh
+# 包安装后：就地建虚拟环境、装依赖、写启动器与应用菜单项
+set -e
+
+APP_DIR="/opt/green-tracker-client"
+INSTALLER="$APP_DIR/packaging/linux/install.sh"
+
+chmod +x "$INSTALLER" "$APP_DIR/packaging/linux/uninstall.sh" 2>/dev/null || true
+
+"$INSTALLER" --in-place \
+    --prefix "$APP_DIR" \
+    --bin-dir /usr/bin \
+    --applications-dir /usr/share/applications \
+    --icon-dir /usr/share/icons/hicolor/scalable/apps \
+    --no-config
+
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q || true
+fi
+
+echo "green-tracker-client 安装完成：应用菜单 → Green Tracker Client"
+echo "每个用户首次启动时会在 ~/.config/green-tracker-client 生成配置模板"
+
+exit 0

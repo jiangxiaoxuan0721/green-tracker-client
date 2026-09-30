@@ -1,0 +1,12 @@
+Package: green-tracker-client
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: all
+Depends: python3 (>= 3.10), python3-venv, python3-pip
+Maintainer: green-tracker <dev@example.com>
+Homepage: https://green-tracker.cn
+Description: 环境/农业数据采集与设备远程管控客户端
+ Green Tracker 客户端：局域网设备发现与管理、环境与土壤数据采集、
+ 本地批次暂存与云端上传；支持 MQTT/HTTP 双指令通道、常驻终端远程执行、
+ 指令能力发现与分级启用策略，并提供图形化调试控制台。

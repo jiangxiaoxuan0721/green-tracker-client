@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Green Tracker Client
+GenericName=环境数据采集客户端
+Comment=环境/农业数据采集、设备管理与云端远程管控
+Exec=@LAUNCHER@
+Icon=@ICON@
+Terminal=false
+Categories=Utility;Network;Science;
+Keywords=green;tracker;sensor;mqtt;
+StartupWMClass=green-tracker-client

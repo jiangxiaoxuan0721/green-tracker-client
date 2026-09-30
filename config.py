@@ -16,6 +16,37 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+CONFIG_DIR_ENV = "GREEN_TRACKER_CONFIG_DIR"
+CONFIG_DIRNAME = "green-tracker-client"
+
+
+def config_dir() -> str:
+    """用户级配置目录（**每次调用重新解析**）。
+
+    开发态配置在仓库根目录的 `.env` 里，但**安装态**下程序跑在
+    `/opt` 或 `~/.local/share` 下、CWD 也不再是仓库根目录，靠 CWD 找 `.env`
+    必然失败。因此统一由本函数给出配置目录：
+
+      * `GREEN_TRACKER_CONFIG_DIR` 显式指定（测试 / 自定义部署）
+      * Windows：`%APPDATA%\\GreenTrackerClient`
+      * 其他：`~/.config/green-tracker-client`
+
+    与 HOME 相关的路径必须惰性解析（见模块顶部约定）。
+    """
+    raw = (os.getenv(CONFIG_DIR_ENV) or "").strip()
+    if raw:
+        return os.path.expanduser(raw)
+    if os.name == "nt":
+        base = os.getenv("APPDATA") or os.path.expanduser("~")
+        return os.path.join(base, "GreenTrackerClient")
+    base = os.getenv("XDG_CONFIG_HOME") or \
+        os.path.join(os.path.expanduser("~"), ".config")
+    return os.path.join(base, CONFIG_DIRNAME)
+
+
+# 安装态：配置目录里的 .env 优先（不覆盖真实环境变量）
+load_dotenv(os.path.join(config_dir(), ".env"))
+# 开发态：仓库根目录的 .env（只补充上面没加载到的项）
 load_dotenv()
 
 # ============================================================
@@ -100,4 +131,7 @@ def command_policy_file() -> str:
     raw = (os.getenv(COMMAND_POLICY_FILE_ENV) or "").strip()
     if raw:
         return os.path.expanduser(raw)
+    installed = os.path.join(config_dir(), COMMAND_POLICY_FILENAME)
+    if os.path.exists(installed):
+        return installed
     return os.path.join(project_root(), "config", COMMAND_POLICY_FILENAME)

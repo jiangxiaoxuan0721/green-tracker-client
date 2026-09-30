@@ -25,6 +25,7 @@ green-tracker-client/
 ├── config.py               # 唯一配置源（DATA_ROOT / API_BASE_URL / 采集间隔…）
 ├── requirements.txt         # 依赖列表
 ├── .env.example             # 环境变量模板
+├── packaging/               # 一键安装包（deb / tar.gz / zip，见 packaging/README.md）
 ├── doc/                     # 文档
 │   └── terminal_commands.md # 远程终端命令对接说明（云端 / Agent 参考）
 ├── api/                     # API 通信模块
@@ -55,7 +56,7 @@ green-tracker-client/
 │   └── topics.py             # Topic 定义常量（4 层通配，支持 announce）
 ├── config/                  # 本地配置（非代码）
 │   └── command_policy.json   # 指令启用开关：{命令名: 是否启用}，优先级最高
-├── tests/                   # pytest 测试（456 条）
+├── tests/                   # pytest 测试（469 条）
 └── ui/                      # PyQt6 图形界面
     ├── main_window.py        # 主窗口（仅做导航装配）
     ├── device_manager.py     # 设备管理页面（TCP 探测 + 心跳刷新）
@@ -67,6 +68,12 @@ green-tracker-client/
 ```
 
 ## 快速开始
+
+> 想直接安装到机器上？见 **[`packaging/README.md`](packaging/README.md)**：
+> `./packaging/build.sh` 产出 deb / tar.gz / zip，`dpkg -i` 或 `./install.sh` 一键装好
+> （自动建 venv、装依赖、写菜单快捷方式、生成配置模板）。
+
+以下是从源码运行的步骤：
 
 ### 1. 安装依赖
 
@@ -476,7 +483,8 @@ MQTT 控制台右上角新增**云端受控指示灯**（与"已连接"同款）
 |----|------|------|
 | PyQt6 | >=6.7 | GUI 框架 |
 | requests | >=2.31 | HTTP 请求 |
-| paho-mqtt | >=1.6 | MQTT 客户端 |
+| paho-mqtt | >=2.0,<3.0 | MQTT 客户端 |
+| pydantic | >=2.0 | 数据模型（设备记录 / 数据类型） |
 | python-dotenv | >=1.0 | 环境变量 |
 
 ## 许可证

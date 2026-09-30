@@ -60,12 +60,11 @@ logger = logging.getLogger("mqtt-client")
 # 配置加载（从 .env 文件）
 # ============================================================
 
-def _load_env():
-    """从项目根目录 .env 加载环境变量。"""
-    try:
-        from dotenv import dotenv_values
-    except ImportError:
-        pass  # dotenv 可选
+def _resolve_env_file() -> Path:
+    """定位 .env：安装态读配置目录，开发态回退到仓库根目录。"""
+    cfg_dir = (os.getenv("GREEN_TRACKER_CONFIG_DIR") or "").strip()
+    if cfg_dir:
+        return Path(cfg_dir).expanduser() / ".env"
 
     root = Path(__file__).resolve().parent.parent
     env_file = root / ".env"
@@ -76,6 +75,17 @@ def _load_env():
             env_file = root / ".env"
             if env_file.exists():
                 break
+    return env_file
+
+
+def _load_env():
+    """从配置目录（安装态）或项目根目录（开发态）的 .env 加载环境变量。"""
+    try:
+        from dotenv import dotenv_values
+    except ImportError:
+        pass  # dotenv 可选
+
+    env_file = _resolve_env_file()
 
     if env_file.exists():
         try:

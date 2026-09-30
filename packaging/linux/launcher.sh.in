@@ -1,0 +1,24 @@
+#!/bin/sh
+# green-tracker-client 启动器（由 install.sh 生成，勿直接编辑）
+set -e
+
+APP_DIR="@APP_DIR@"
+
+# 配置目录优先级：环境变量 > 安装时写入的默认值（按启动用户展开）
+: "${GREEN_TRACKER_CONFIG_DIR:=@CONFIG_DIR@}"
+CONFIG_DIR="$GREEN_TRACKER_CONFIG_DIR"
+
+# 首次运行：补齐配置模板（已存在的文件不会被覆盖）
+if [ ! -f "$CONFIG_DIR/.env" ] && [ -f "$APP_DIR/packaging/common/prepare_config.py" ]; then
+    mkdir -p "$CONFIG_DIR"
+    if command -v python3 >/dev/null 2>&1; then
+        python3 "$APP_DIR/packaging/common/prepare_config.py" "$CONFIG_DIR" \
+            >/dev/null 2>&1 || true
+    fi
+fi
+
+mkdir -p "$CONFIG_DIR"
+cd "$CONFIG_DIR" || exit 1
+
+export GREEN_TRACKER_CONFIG_DIR="$CONFIG_DIR"
+exec "$APP_DIR/.venv/bin/python" "$APP_DIR/main.py" "$@"
