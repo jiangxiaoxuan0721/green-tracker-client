@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Green Tracker 设备端 MQTT 客户端。
+GTClient 设备端 MQTT 客户端。
 
 功能：
   1. 使用预注册身份认证连接云端 Broker
@@ -547,7 +547,7 @@ def main():
 
     print("""
 ╔════════════════════════════════════════╗
-║     Green Tracker MQTT 客户端           ║
+║       GTClient MQTT 客户端              ║
 ╚════════════════════════════════════════╝
 """)
 

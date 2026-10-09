@@ -16,8 +16,12 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+# 软件命名：显示名 / 简称
+APP_DISPLAY_NAME = "绿意追踪客户端软件"
+APP_SHORT_NAME = "GTClient"
+
 CONFIG_DIR_ENV = "GREEN_TRACKER_CONFIG_DIR"
-CONFIG_DIRNAME = "green-tracker-client"
+CONFIG_DIRNAME = "gtclient"
 
 
 def config_dir() -> str:
@@ -28,8 +32,8 @@ def config_dir() -> str:
     必然失败。因此统一由本函数给出配置目录：
 
       * `GREEN_TRACKER_CONFIG_DIR` 显式指定（测试 / 自定义部署）
-      * Windows：`%APPDATA%\\GreenTrackerClient`
-      * 其他：`~/.config/green-tracker-client`
+      * Windows：`%APPDATA%\\GTClient`
+      * 其他：`~/.config/gtclient`
 
     与 HOME 相关的路径必须惰性解析（见模块顶部约定）。
     """
@@ -38,7 +42,7 @@ def config_dir() -> str:
         return os.path.expanduser(raw)
     if os.name == "nt":
         base = os.getenv("APPDATA") or os.path.expanduser("~")
-        return os.path.join(base, "GreenTrackerClient")
+        return os.path.join(base, APP_SHORT_NAME)
     base = os.getenv("XDG_CONFIG_HOME") or \
         os.path.join(os.path.expanduser("~"), ".config")
     return os.path.join(base, CONFIG_DIRNAME)
@@ -123,7 +127,7 @@ def command_policy_file() -> str:
     默认取仓库内 `config/command_policy.json`；部署方需要把策略放到仓库之外
     （只读部署、多实例共用同一份策略等）时用环境变量覆盖路径：
 
-        GREEN_TRACKER_COMMAND_POLICY_FILE=/etc/green-tracker/command_policy.json
+        GREEN_TRACKER_COMMAND_POLICY_FILE=/etc/gtclient/command_policy.json
 
     文件内容是扁平的 `{命令名: 是否启用}`，如
     `{"execute_shell": false, "cloud_probe": true}`。

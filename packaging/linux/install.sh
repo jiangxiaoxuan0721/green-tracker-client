@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键安装 green-tracker-client（源码 + venv 形态）
+# 一键安装绿意追踪客户端软件（GTClient，源码 + venv 形态）
 #
 #   ./install.sh                      用户级安装（默认 ~/.local/share/...）
 #   sudo ./install.sh --system        系统级安装（/opt + /usr/bin）
@@ -9,7 +9,9 @@
 # 不会动的东西：已存在的配置文件、~/green_tracker_data 采集数据
 set -euo pipefail
 
-APP_NAME="green-tracker-client"
+APP_NAME="gtclient"
+# 更名前的目录名，仅用于升级迁移
+LEGACY_APP_NAME="green-tracker-client"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 MIN_PYTHON="3.10"
@@ -18,7 +20,6 @@ SOURCE_DIR="$REPO_ROOT"
 PREFIX="${PREFIX:-$HOME/.local/share/$APP_NAME}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 APPLICATIONS_DIR="${APPLICATIONS_DIR:-$HOME/.local/share/applications}"
-ICON_DIR="${ICON_DIR:-$HOME/.local/share/icons/hicolor/scalable/apps}"
 CONFIG_DIR="${CONFIG_DIR:-}"
 PYTHON="${PYTHON:-python3}"
 IN_PLACE=0
@@ -34,7 +35,6 @@ while [[ $# -gt 0 ]]; do
         --prefix)           PREFIX="$2"; shift 2 ;;
         --bin-dir)          BIN_DIR="$2"; shift 2 ;;
         --applications-dir) APPLICATIONS_DIR="$2"; shift 2 ;;
-        --icon-dir)         ICON_DIR="$2"; shift 2 ;;
         --source-dir)       SOURCE_DIR="$2"; shift 2 ;;
         --config-dir)       CONFIG_DIR="$2"; shift 2 ;;
         --python)           PYTHON="$2"; shift 2 ;;
@@ -50,7 +50,6 @@ if [[ "${SYSTEM:-0}" == "1" ]]; then
     PREFIX="/opt/$APP_NAME"
     BIN_DIR="/usr/bin"
     APPLICATIONS_DIR="/usr/share/applications"
-    ICON_DIR="/usr/share/icons/hicolor/scalable/apps"
     NO_CONFIG=1
 fi
 
@@ -99,10 +98,9 @@ sed -e "s|@APP_DIR@|$PREFIX|g" -e "s|@CONFIG_DIR@|$DEFAULT_CONFIG|g" \
 chmod +x "$LAUNCHER"
 log "启动器: $LAUNCHER"
 
-# ---------------------------------------------------------------- 图标菜单
-mkdir -p "$ICON_DIR" "$APPLICATIONS_DIR"
-cp "$PREFIX/packaging/linux/$APP_NAME.svg" "$ICON_DIR/$APP_NAME.svg"
-sed -e "s|@LAUNCHER@|$LAUNCHER|g" -e "s|@ICON@|$ICON_DIR/$APP_NAME.svg|g" \
+# ---------------------------------------------------------------- 应用菜单
+mkdir -p "$APPLICATIONS_DIR"
+sed -e "s|@LAUNCHER@|$LAUNCHER|g" \
     "$PREFIX/packaging/linux/$APP_NAME.desktop.in" \
     > "$APPLICATIONS_DIR/$APP_NAME.desktop"
 chmod +x "$APPLICATIONS_DIR/$APP_NAME.desktop"
@@ -117,6 +115,18 @@ if [[ "$NO_CONFIG" == "1" ]]; then
     log "跳过配置生成（首次启动时按当前用户自动创建）"
 else
     TARGET_CONFIG="${CONFIG_DIR:-$HOME/.config/$APP_NAME}"
+    # 旧版本升级：把更名前的配置目录迁到新目录，避免已填写的 .env 丢失
+    LEGACY_CONFIG="$HOME/.config/$LEGACY_APP_NAME"
+    if [[ -z "$CONFIG_DIR" && -d "$LEGACY_CONFIG" && ! -d "$TARGET_CONFIG" ]]; then
+        mkdir -p "$(dirname "$TARGET_CONFIG")"
+        cp -a "$LEGACY_CONFIG" "$TARGET_CONFIG"
+        log "已迁移旧配置: $LEGACY_CONFIG -> $TARGET_CONFIG"
+    fi
+    # 旧版本安装目录（更名前）若还存在，提示可自行清理
+    if [[ -d "$HOME/.local/share/$LEGACY_APP_NAME" ]]; then
+        log "检测到旧安装目录 $HOME/.local/share/$LEGACY_APP_NAME，"
+        log "确认新版本可用后可手动删除：rm -rf $HOME/.local/share/$LEGACY_APP_NAME"
+    fi
     log "生成配置模板: $TARGET_CONFIG"
     "$PYTHON" "$PREFIX/packaging/common/prepare_config.py" "$TARGET_CONFIG"
 fi

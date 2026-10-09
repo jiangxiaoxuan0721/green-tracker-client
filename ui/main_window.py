@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (QFrame, QWidget, QVBoxLayout, QHBoxLayout, QPushBut
                              QLabel, QMessageBox, QListWidgetItem, QStackedWidget)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor
+import config
 from api import get_active_sessions
 from api.cloud_state import get_cloud_state
 from device.runtime import init_data_sensor
@@ -368,7 +369,7 @@ class MainWindow(QWidget):
             print(f"[MQTT] 启动跳过: {e}")
 
     def init_ui(self):
-        self.setWindowTitle("Green Tracker")
+        self.setWindowTitle(config.APP_DISPLAY_NAME)
         self.resize(720, 480)
         self.setStyleSheet(f"background-color: {COLORS['bg']};")
 

@@ -5,8 +5,8 @@
 
     python3 packaging/common/prepare_config.py [配置目录]
 
-不传配置目录时按 `config.config_dir()` 解析（Linux: ~/.config/green-tracker-client，
-Windows: %APPDATA%\\GreenTrackerClient），也可由 GREEN_TRACKER_CONFIG_DIR 指定。
+不传配置目录时按 `config.config_dir()` 解析（Linux: ~/.config/gtclient，
+Windows: %APPDATA%\\GTClient），也可由 GREEN_TRACKER_CONFIG_DIR 指定。
 
 输出一行 JSON 摘要，便于安装脚本打印：`{"config_dir": ..., "files": {".env": "created", ...}}`
 每个文件的取值为 created（新生成）/ kept（已存在，保留）/ missing_source（源模板缺失）。
@@ -70,7 +70,7 @@ def prepare(config_dir: str) -> Dict[str, object]:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="生成 green-tracker-client 配置模板")
+    parser = argparse.ArgumentParser(description="生成 GTClient 配置模板")
     parser.add_argument("config_dir", nargs="?",
                         help="目标配置目录，缺省时按 config.config_dir() 解析")
     args = parser.parse_args(argv)

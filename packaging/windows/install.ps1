@@ -1,4 +1,4 @@
-# Install green-tracker-client (Windows, source + venv layout)
+# Install GTClient (Windows, source + venv layout)
 #
 # NOTE: this file is intentionally kept pure ASCII. Windows PowerShell 5.1
 #       reads BOM-less .ps1 files using the system ANSI codepage, so any
@@ -7,17 +7,19 @@
 # Usage (PowerShell):
 #   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 #   .\install.ps1
-#   .\install.ps1 -InstallDir D:\Apps\GreenTracker -ConfigDir D:\Config\GreenTracker
+#   .\install.ps1 -InstallDir D:\Apps\GTClient -ConfigDir D:\Config\GTClient
 param(
-    [string]$InstallDir = "$env:LOCALAPPDATA\GreenTrackerClient",
-    [string]$ConfigDir  = "$env:APPDATA\GreenTrackerClient",
+    [string]$InstallDir = "$env:LOCALAPPDATA\GTClient",
+    [string]$ConfigDir  = "$env:APPDATA\GTClient",
     [string]$SourceDir  = "",
     [switch]$NoConfig,
     [switch]$NoShortcut
 )
 
 $ErrorActionPreference = 'Stop'
-$AppName = 'green-tracker-client'
+$AppName = 'gtclient'
+# Directory name used before the rename; only used to migrate existing config.
+$LegacyConfigDir = "$env:APPDATA\GreenTrackerClient"
 
 if (-not $SourceDir) {
     # packaging\windows\install.ps1 -> repo root
@@ -88,6 +90,11 @@ Write-Step "Launcher: $launcher"
 
 # ---------------------------------------------------------------- config
 if (-not $NoConfig) {
+    # Upgrade path: carry over config written before the rename.
+    if ((Test-Path $LegacyConfigDir) -and -not (Test-Path $ConfigDir)) {
+        Copy-Item -Path $LegacyConfigDir -Destination $ConfigDir -Recurse -Force
+        Write-Step "Migrated legacy config: $LegacyConfigDir -> $ConfigDir"
+    }
     Write-Step "Writing config template: $ConfigDir"
     $cfgArgs = @($pythonArgs) + @((Join-Path $InstallDir 'packaging\common\prepare_config.py'), $ConfigDir)
     & $pythonExe @cfgArgs
@@ -96,15 +103,15 @@ if (-not $NoConfig) {
 # ---------------------------------------------------------------- shortcuts
 if (-not $NoShortcut) {
     $ws = New-Object -ComObject WScript.Shell
-    $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Green Tracker Client'
+    $startMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\GTClient'
     New-Item -ItemType Directory -Force -Path $startMenu | Out-Null
 
     foreach ($dir in @($startMenu, $ws.SpecialFolders('Desktop'))) {
         if (-not $dir) { continue }
-        $shortcut = $ws.CreateShortcut((Join-Path $dir 'Green Tracker Client.lnk'))
+        $shortcut = $ws.CreateShortcut((Join-Path $dir 'GTClient.lnk'))
         $shortcut.TargetPath = $launcher
         $shortcut.WorkingDirectory = $ConfigDir
-        $shortcut.Description = 'Environment and agriculture data acquisition / remote device control client'
+        $shortcut.Description = 'GTClient - environment and agriculture data acquisition / remote device control'
         $shortcut.Save()
     }
     Write-Step "Start menu and desktop shortcuts created"

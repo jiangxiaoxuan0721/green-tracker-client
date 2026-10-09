@@ -1,4 +1,4 @@
-# Uninstall green-tracker-client (Windows)
+# Uninstall GTClient (Windows)
 # Removes the app and shortcuts only; config and collected data are kept.
 #
 # NOTE: this file is intentionally kept pure ASCII. Windows PowerShell 5.1
@@ -8,12 +8,12 @@
 #   .\uninstall.ps1
 #   .\uninstall.ps1 -Purge        also delete the config directory
 param(
-    [string]$InstallDir = "$env:LOCALAPPDATA\GreenTrackerClient",
-    [string]$ConfigDir  = "$env:APPDATA\GreenTrackerClient",
+    [string]$InstallDir = "$env:LOCALAPPDATA\GTClient",
+    [string]$ConfigDir  = "$env:APPDATA\GTClient",
     [switch]$Purge
 )
 
-$AppName = 'green-tracker-client'
+$AppName = 'gtclient'
 
 function Remove-IfExists($path) {
     if (Test-Path $path) {
@@ -25,9 +25,9 @@ function Remove-IfExists($path) {
 Remove-IfExists $InstallDir
 
 $ws = New-Object -ComObject WScript.Shell
-Remove-IfExists (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\Green Tracker Client')
+Remove-IfExists (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\GTClient')
 foreach ($dir in @($ws.SpecialFolders('Desktop'))) {
-    if ($dir) { Remove-IfExists (Join-Path $dir 'Green Tracker Client.lnk') }
+    if ($dir) { Remove-IfExists (Join-Path $dir 'GTClient.lnk') }
 }
 
 if ($Purge) {

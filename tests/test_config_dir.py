@@ -26,7 +26,7 @@ class TestConfigDir:
     def test_default_under_home(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HOME", str(tmp_path))
         assert config.config_dir() == str(
-            tmp_path / ".config" / "green-tracker-client")
+            tmp_path / ".config" / "gtclient")
 
     def test_env_overrides(self, monkeypatch, tmp_path):
         monkeypatch.setenv("GREEN_TRACKER_CONFIG_DIR", str(tmp_path / "cfg"))
@@ -35,7 +35,7 @@ class TestConfigDir:
     def test_xdg_config_home_is_honoured(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-        assert config.config_dir() == str(tmp_path / "xdg" / "green-tracker-client")
+        assert config.config_dir() == str(tmp_path / "xdg" / "gtclient")
 
     def test_resolved_on_every_call(self, monkeypatch, tmp_path):
         """惰性解析：HOME 变化后结果随之变化（模块常量会在 import 时冻结）。"""
@@ -48,8 +48,8 @@ class TestConfigDir:
 class TestCommandPolicyFile:
     def test_explicit_env_wins(self, monkeypatch):
         monkeypatch.setenv("GREEN_TRACKER_COMMAND_POLICY_FILE",
-                           "/etc/green-tracker/policy.json")
-        assert config.command_policy_file() == "/etc/green-tracker/policy.json"
+                           "/etc/gtclient/policy.json")
+        assert config.command_policy_file() == "/etc/gtclient/policy.json"
 
     def test_config_dir_wins_over_repo_default(self, monkeypatch, tmp_path):
         cfg = tmp_path / "cfg"

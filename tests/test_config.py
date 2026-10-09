@@ -4,6 +4,20 @@ import os
 import config
 
 
+def test_app_naming_constants():
+    assert config.APP_DISPLAY_NAME == "绿意追踪客户端软件"
+    assert config.APP_SHORT_NAME == "GTClient"
+
+
+def test_config_dirname_matches_short_name(monkeypatch, tmp_path):
+    """配置目录名与简称一致，避免安装脚本和 config 解析出两个目录。"""
+    monkeypatch.delenv("GREEN_TRACKER_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert config.config_dir().endswith(config.CONFIG_DIRNAME)
+    assert config.CONFIG_DIRNAME == config.APP_SHORT_NAME.lower()
+
+
 def test_data_root_default(monkeypatch):
     monkeypatch.delenv("GREEN_TRACKER_DATA_DIR", raising=False)
     assert config.data_root() == os.path.expanduser("~/green_tracker_data")

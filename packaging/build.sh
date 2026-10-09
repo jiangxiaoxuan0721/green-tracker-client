@@ -5,12 +5,12 @@
 #   VERSION=1.2.3 ./build.sh
 #
 # 产物：
-#   dist/green-tracker-client_<ver>_all.deb   Debian 系：sudo dpkg -i
-#   dist/green-tracker-client-<ver>-linux.tar.gz   通用 Linux：解压后 ./install.sh
-#   dist/green-tracker-client-<ver>-windows.zip    Windows：解压后 install.ps1
+#   dist/gtclient_<ver>_all.deb              Debian 系：sudo dpkg -i
+#   dist/gtclient-<ver>-linux.tar.gz         通用 Linux：解压后 ./install.sh
+#   dist/gtclient-<ver>-windows.zip          Windows：解压后 install.ps1
 set -euo pipefail
 
-APP_NAME="green-tracker-client"
+APP_NAME="gtclient"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DIST_DIR="$REPO_ROOT/dist"

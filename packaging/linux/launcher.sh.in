@@ -1,5 +1,5 @@
 #!/bin/sh
-# green-tracker-client 启动器（由 install.sh 生成，勿直接编辑）
+# GTClient（绿意追踪客户端软件）启动器（由 install.sh 生成，勿直接编辑）
 set -e
 
 APP_DIR="@APP_DIR@"

@@ -42,6 +42,9 @@ def _apply_light_theme(app: QApplication) -> None:
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
+    app.setApplicationName(config.APP_SHORT_NAME)
+    app.setApplicationDisplayName(config.APP_DISPLAY_NAME)
+
     _apply_light_theme(app)
 
     font = QFont()

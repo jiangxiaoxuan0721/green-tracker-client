@@ -241,8 +241,8 @@ class TestPolicyFilePath:
     def test_env_overrides_path(self, monkeypatch):
         """部署方可把策略放到仓库之外（只读部署 / 多实例共用）。"""
         monkeypatch.setenv("GREEN_TRACKER_COMMAND_POLICY_FILE",
-                           "/etc/green-tracker/policy.json")
-        assert config.command_policy_file() == "/etc/green-tracker/policy.json"
+                           "/etc/gtclient/policy.json")
+        assert config.command_policy_file() == "/etc/gtclient/policy.json"
 
 
 # ============================================================

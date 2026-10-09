@@ -1,4 +1,4 @@
-# Green Tracker MQTT 通信模块
+# GTClient MQTT 通信模块
 #
 # 模块说明：
 #   mqtt.client       — 设备端 MQTT 客户端（心跳上报、指令接收）

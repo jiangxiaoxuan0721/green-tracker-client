@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# 构建 Debian 安装包：dist/green-tracker-client_<version>_all.deb
+# 构建 Debian 安装包：dist/gtclient_<version>_all.deb
 #
 #   ./build_deb.sh             版本取 git describe，回退 1.0.0
 #   VERSION=1.2.3 ./build_deb.sh
 set -euo pipefail
 
-APP_NAME="green-tracker-client"
+APP_NAME="gtclient"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DEB_TEMPLATE="$SCRIPT_DIR/deb"

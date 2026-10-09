@@ -2,7 +2,7 @@
 # 卸载前：清掉启动器、菜单项与虚拟环境，保留用户配置与采集数据
 set -e
 
-APP_DIR="/opt/green-tracker-client"
+APP_DIR="/opt/gtclient"
 UNINSTALLER="$APP_DIR/packaging/linux/uninstall.sh"
 
 if [ -x "$UNINSTALLER" ]; then

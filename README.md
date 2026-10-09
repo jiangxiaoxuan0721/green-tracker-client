@@ -1,6 +1,25 @@
-# Green Tracker 客户端
+# 绿意追踪客户端软件（GTClient）
 
-绿色追踪器客户端应用，用于环境/农业数据采集、设备管理和数据上传。
+环境/农业数据采集、设备管理与云端远程管控的桌面客户端。
+
+## 命名约定
+
+| 用途 | 取值 |
+| --- | --- |
+| 显示名（窗口标题、应用菜单、包描述） | `绿意追踪客户端软件` |
+| 简称（代码标识、安装目录、启动器） | `GTClient` |
+| 包名 / 安装目录 / 启动命令 | `gtclient` |
+
+以下标识符是**线上已在用的运行时约定**，不随软件简称调整，请勿改动：
+
+| 标识符 | 说明 |
+| --- | --- |
+| 环境变量前缀 `GREEN_TRACKER_`（`GREEN_TRACKER_CONFIG_DIR` / `GREEN_TRACKER_DATA_DIR` / `GREEN_TRACKER_HEARTBEAT` / `GREEN_TRACKER_ENABLE_SHELL` / `GREEN_TRACKER_COMMAND_POLICY_FILE`） | 已部署设备在用，改名会导致配置不生效 |
+| 数据目录 `~/green_tracker_data` | 已采集数据都在这里，改名等于丢数据 |
+| MQTT 主题前缀 `green-tracker/device/{id}/...` | 与云端 Server 约定的协议前缀，改了设备会失联 |
+| 后端域名 `green-tracker.cn` | 外部服务域名 |
+
+软件默认**不附带任何图标**（避免第三方图标的版权/商标风险），桌面入口由系统使用默认图标呈现。
 
 ## 功能特性
 
@@ -20,7 +39,7 @@
 ## 项目结构
 
 ```bash
-green-tracker-client/
+gtclient/
 ├── main.py                 # 应用入口
 ├── config.py               # 唯一配置源（DATA_ROOT / API_BASE_URL / 采集间隔…）
 ├── requirements.txt         # 依赖列表
@@ -235,7 +254,7 @@ on_connect 回调:
 
 ```bash
 # .env
-GREEN_TRACKER_COMMAND_POLICY_FILE=/etc/green-tracker/command_policy.json
+GREEN_TRACKER_COMMAND_POLICY_FILE=/etc/gtclient/command_policy.json
 ```
 
 改文件后**无需重启**：按 `路径 + mtime + 大小` 缓存，保存即生效；文件缺失等同于
